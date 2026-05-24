@@ -37,6 +37,12 @@ coverage
 /.cargo-cache-docker/
 /target-docker/
 
+# scripts/bench-build.sh and scripts/timings.sh write per-run artefacts
+# under artifacts/. The committed `BENCHMARKS.md` carries the curated
+# history; the raw json / html reports are local-only.
+/artifacts/
+!/artifacts/.gitkeep
+
 # Contributors are free to drop sample photos into examples/ for local
 # experimentation, but we don't track any image binaries in the repo —
 # they tend to be large, personal, and never the right shape for what

@@ -1,0 +1,69 @@
+name: bench
+
+# Runs the build / test bench script and posts the summary as a PR comment.
+# Lives on PRs only (push to main runs the regular ci.yml — bench-on-main
+# would race the cache for no insight).
+
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Distinct cache namespace so we don't pollute / get polluted by ci.yml.
+          shared-key: bench-${{ runner.os }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: hyperfine,just,wasm-pack,jq
+
+      - name: Bench (host subset)
+        id: bench
+        run: |
+          # Container bench is skipped on Actions runners — they don't have the
+          # photo-frame-dev image built locally and pulling/building it would
+          # dominate measurement noise. Host subset is representative enough
+          # for PR-time regression spotting.
+          scripts/bench-build.sh host
+          # Find the latest summary file and stash its path for the next step.
+          latest="$(ls -dt artifacts/bench/*/ | head -n1)summary.md"
+          echo "summary=$latest" >> "$GITHUB_OUTPUT"
+
+      - name: Comment results on PR
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: bench-${{ runner.os }}
+          path: ${{ steps.bench.outputs.summary }}
+
+      - name: Upload bench artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ github.run_id }}
+          path: artifacts/bench/
+          retention-days: 14
