@@ -31,6 +31,10 @@ coverage
 # Lefthook artifacts
 .lefthook-local.yml
 
+# Claude Code local state (per-repo session log, scheduled tasks).
+# Not project source; never belongs in the public history.
+.claude/
+
 # scripts/bench-build.sh and scripts/timings.sh write per-run artefacts
 # under artifacts/. The committed `BENCHMARKS.md` carries the curated
 # history; the raw json / html reports are local-only.
