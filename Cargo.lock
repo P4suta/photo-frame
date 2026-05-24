@@ -1063,6 +1063,7 @@ dependencies = [
  "photo-frame-types",
  "thiserror",
  "tracing",
+ "web-time",
 ]
 
 [[package]]
@@ -1149,6 +1150,7 @@ name = "photo-frame-wasm"
 version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
+ "js-sys",
  "photo-frame",
  "serde",
  "serde-wasm-bindgen",

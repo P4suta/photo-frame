@@ -243,3 +243,59 @@ footer {
 a {
   color: var(--accent);
 }
+
+/* ── Batch list ────────────────────────────────────────────────────── */
+
+#batch {
+  margin-top: 1.5rem;
+}
+
+.batch-list {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.batch-list .row {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.4rem 0.75rem;
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: 0.9rem;
+}
+
+.batch-list .row.processing {
+  outline: 1px dashed var(--accent);
+}
+
+.batch-list .row.done {
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+}
+
+.batch-list .row.error {
+  background: color-mix(in srgb, #d33 12%, var(--surface));
+  color: #a22;
+}
+
+.batch-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.batch-status {
+  text-transform: capitalize;
+  font-weight: 500;
+}
+
+.batch-meta {
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+}
