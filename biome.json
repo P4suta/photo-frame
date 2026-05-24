@@ -23,9 +23,6 @@
     "enabled": true,
     "rules": {
       "recommended": true,
-      "a11y": {
-        "useSemanticElements": "off"
-      },
       "style": {
         "noNonNullAssertion": "error",
         "useConst": "error",
