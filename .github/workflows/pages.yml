@@ -1,61 +1,57 @@
 name: pages
 
+# Deploy the Vite/WASM bundle to GitHub Pages.
+#
+# Phase 2 reuses ci.yml's web-build artefact instead of rebuilding from
+# scratch — the dist/ tarball is already shaped for publishing (Geist
+# attribution copied in by the CI job). pages.yml chains off ci.yml's
+# successful completion via workflow_run so the deploy fires once per
+# merged main build.
+
 on:
-  push:
+  workflow_run:
+    workflows: ['ci']
+    types: [completed]
     branches: [main]
   workflow_dispatch:
+    inputs:
+      ci_run_id:
+        description: 'ci.yml run ID to reuse the web-dist artefact from'
+        required: true
 
 permissions:
   contents: read
   pages: write
   id-token: write
+  actions: read  # for downloading artefacts from the ci.yml run
 
 concurrency:
   group: pages
   cancel-in-progress: false
 
 jobs:
-  build:
+  upload:
+    name: upload Pages artefact (from ci.yml dist)
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Download web-dist artefact from ci.yml run
+        uses: actions/download-artifact@v4
         with:
-          targets: wasm32-unknown-unknown
-
-      - uses: Swatinem/rust-cache@v2
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: just,wasm-pack
-
-      - name: Build WASM package
-        run: just wasm-build
-
-      - name: Build web bundle
-        working-directory: crates/photo-frame-wasm/www
-        run: |
-          bun install --frozen-lockfile
-          bun run build
-          # Ship the bundled font's full upstream attribution alongside the WASM
-          # output, exactly as Vercel published it.
-          mkdir -p dist/fonts/Geist
-          cp ../../photo-frame-frame/assets/fonts/Geist/LICENSE.txt        dist/fonts/Geist/
-          cp ../../photo-frame-frame/assets/fonts/Geist/OFL.txt            dist/fonts/Geist/
-          cp ../../photo-frame-frame/assets/fonts/Geist/AUTHORS.txt        dist/fonts/Geist/
-          cp ../../photo-frame-frame/assets/fonts/Geist/CONTRIBUTORS.txt   dist/fonts/Geist/
+          name: web-dist-${{ github.event.workflow_run.id || github.event.inputs.ci_run_id }}
+          path: dist/
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id || github.event.inputs.ci_run_id }}
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: crates/photo-frame-wasm/www/dist
+          path: dist
 
   deploy:
-    needs: build
+    needs: upload
     runs-on: ubuntu-latest
     environment:
       name: github-pages

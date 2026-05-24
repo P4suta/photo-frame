@@ -1,0 +1,88 @@
+name: security
+
+# Scheduled deep dep-tree scans. These run independently of ci.yml so an
+# advisory landing midweek doesn't sit unnoticed until the next PR — and
+# so that PRs aren't gated on transient advisory churn (only on the
+# bans / licenses contracts they directly touch).
+#
+# - `cargo deny check advisories`: RustSec advisory DB (CVE-ish).
+# - `cargo deny check licenses`:    catch a dep flipping to a licence the
+#                                   project hasn't approved.
+# - `cargo deny check bans`:        the C-purity contract (already gated
+#                                   by ci.yml on every push; included
+#                                   here too as a daily belt-and-braces).
+
+on:
+  schedule:
+    # 07:00 UTC daily — picks up overnight advisory updates without
+    # racing the morning's first PR run.
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'deny.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/security.yml'
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deny:
+    name: cargo-deny (${{ matrix.check }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [advisories, licenses, bans, sources]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: security
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      - name: cargo deny check ${{ matrix.check }}
+        run: cargo deny --workspace check ${{ matrix.check }}
+
+  heif-build:
+    # Container-based job: the `heif` cargo feature pulls in libheif-sys,
+    # which needs libheif-dev installed. The photo-frame-dev image carries
+    # it (Phase 1.4); building the image dominates the wall-clock so we
+    # only do this scan on schedule or when something dep-relevant
+    # changes.
+    name: heif feature compile + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build photo-frame-dev image
+        run: HOST_UID=1000 HOST_GID=1000 docker compose build dev
+
+      - name: cargo build --features heif
+        run: |
+          docker compose run --rm --no-deps dev \
+            cargo build -p photo-frame-decode --features heif
+
+      - name: cargo nextest --features heif
+        run: |
+          docker compose run --rm --no-deps dev \
+            cargo nextest run -p photo-frame-decode --features heif --all-targets

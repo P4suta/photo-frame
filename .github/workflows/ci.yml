@@ -14,34 +14,167 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
 
+# ─────────────────────────────────────────────────────────────────────────
+# Phase 2 of the velocity overhaul (see BENCHMARKS.md).
+#
+# The previous single-job "run `just ci` and hope it's fast" was
+# sequential — fmt → clippy → test → wasm-build → web-build — and the
+# wall-clock dominated by the slowest gate. Splitting into independent
+# jobs lets the cluster run them concurrently; each has its own cache
+# namespace so an unrelated change can't invalidate every job's cache.
+#
+# Job topology:
+#   format-lint  — fmt + clippy + biome + taplo + typos + cargo-deny bans
+#   rust-test    — cargo nextest run (+ doc tests), default features
+#   wasm-build   — wasm-pack release bundle, uploaded as artefact
+#   web-build    — bun install + tsc + vite build, *consumes* the wasm
+#                  artefact from rust-test's sibling job to avoid building
+#                  the WASM bundle twice
+#   heif-build   — cargo build/test --features heif inside the
+#                  photo-frame-dev container (separate workflow file
+#                  because the docker build is the dominant cost)
+#
+# Scheduled scans (cargo-deny advisories + licenses) live in
+# .github/workflows/security.yml.
+# ─────────────────────────────────────────────────────────────────────────
+
 jobs:
-  check:
-    name: fmt / lint / test / wasm
+  format-lint:
+    name: format / lint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
           targets: wasm32-unknown-unknown
 
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: lint
+          # Don't repopulate the cache on a hit — the lint job's
+          # workspace artefacts are small and rarely-changing.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Install bun
-        uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
-      - name: Install just, taplo, typos, wasm-pack, cargo-deny
-        uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@v2
         with:
-          tool: just,taplo-cli,typos-cli,wasm-pack,cargo-deny
+          tool: just,taplo-cli,typos-cli,cargo-deny
 
-      - name: Install biome (via bun, npm-compatible)
+      - name: Install biome (via bun)
         run: bun install -g @biomejs/biome
 
-      - name: Run full CI suite
-        run: just ci
+      - name: fmt-check
+        run: just fmt-check
+
+      - name: lint
+        run: just lint
+
+  rust-test:
+    name: rust / nextest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,cargo-nextest
+
+      - name: nextest (ci profile)
+        run: cargo nextest run --workspace --all-targets --profile ci
+
+      - name: doc tests
+        run: cargo test --workspace --doc --no-fail-fast
+
+      - name: Upload nextest JUnit XML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-${{ github.run_id }}
+          path: target/nextest/ci/junit.xml
+          retention-days: 14
+          if-no-files-found: ignore
+
+  wasm-build:
+    name: wasm / pack
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wasm
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,wasm-pack
+
+      - name: wasm-pack build
+        run: just wasm-build
+
+      - name: Upload WASM bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-pkg-${{ github.run_id }}
+          path: crates/photo-frame-wasm/www/pkg/
+          retention-days: 7
+
+  web-build:
+    name: web / vite
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    needs: wasm-build
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Download WASM bundle from wasm-build job
+        uses: actions/download-artifact@v4
+        with:
+          name: wasm-pkg-${{ github.run_id }}
+          path: crates/photo-frame-wasm/www/pkg/
+
+      - name: bun install + vite build
+        working-directory: crates/photo-frame-wasm/www
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+          # Ship the Geist Sans attribution verbatim alongside the WASM
+          # bundle — required by the OFL licence the upstream font is
+          # distributed under. Adding the copy here (rather than in
+          # pages.yml) means the artefact pages.yml consumes is already
+          # release-shaped.
+          mkdir -p dist/fonts/Geist
+          cp ../../photo-frame-frame/assets/fonts/Geist/LICENSE.txt        dist/fonts/Geist/
+          cp ../../photo-frame-frame/assets/fonts/Geist/OFL.txt            dist/fonts/Geist/
+          cp ../../photo-frame-frame/assets/fonts/Geist/AUTHORS.txt        dist/fonts/Geist/
+          cp ../../photo-frame-frame/assets/fonts/Geist/CONTRIBUTORS.txt   dist/fonts/Geist/
+
+      - name: Upload Vite dist for pages.yml to reuse
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist-${{ github.run_id }}
+          path: crates/photo-frame-wasm/www/dist/
+          retention-days: 7
