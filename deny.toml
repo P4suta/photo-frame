@@ -41,8 +41,25 @@ deny = [
 # would have to override the `deny` list, not whitelist a subtree.
 
 [licenses]
-# We're not enforcing a license allowlist here; the v1 dep tree is hand-audited
-# (Apache-2.0 / MIT / OFL-1.1). Tighten in a later pass if desired.
+# Permissive OSI-approved licenses only. Project itself is dual MIT /
+# Apache-2.0; the dep tree is expected to be compatible with that
+# distribution choice. Adding a license here is a one-way ratchet —
+# verify the obligations before extending.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "0BSD",
+    "OFL-1.1",     # Geist Sans bundled with photo-frame-frame
+    "MPL-2.0",     # weak-copyleft (file-level), considered compatible
+]
 unused-allowed-license = "allow"
 confidence-threshold   = 0.93
 
