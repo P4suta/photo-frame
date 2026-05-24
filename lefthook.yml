@@ -4,6 +4,17 @@
 pre-commit:
   parallel: true
   commands:
+    # ── Signing policy ───────────────────────────────────────────────
+    # Refuse to record a commit unless commit.gpgsign + user.signingkey
+    # are properly configured. Project policy is that *every* commit is
+    # signed (GitHub's repository ruleset enforces the same — without
+    # this hook a contributor would push, get refused, and only then
+    # learn). Runs before any format / lint commands so a misconfigured
+    # environment fails fast.
+    signing-config:
+      priority: 1
+      run: scripts/check-signing.sh config
+
     fmt-rust:
       glob: '*.rs'
       run: cargo fmt --all -- --check
@@ -22,6 +33,20 @@ pre-commit:
 pre-push:
   parallel: true
   commands:
+    # ── Signing verification ─────────────────────────────────────────
+    # The pre-commit hook above stops *new* unsigned commits from being
+    # created locally. This step is the gate that stops historically-
+    # unsigned commits (cherry-picks, rebases from elsewhere, imports)
+    # from ever reaching the remote. Walks the git push stdin protocol
+    # and refuses if `%G?` is anything other than `G` for any commit
+    # in the range being pushed.
+    #
+    # Reads pre-push stdin via lefthook's stdin-passthrough (interactive=true).
+    signing-verify:
+      priority: 1
+      interactive: true
+      run: scripts/check-signing.sh pre-push
+
     clippy:
       run: just lint-rust
     deps:
