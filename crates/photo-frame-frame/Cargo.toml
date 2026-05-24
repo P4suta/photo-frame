@@ -1,0 +1,23 @@
+[package]
+name        = "photo-frame-frame"
+description = "Render a Photograph into a framed RGBA Pixels grid (golden-ratio layout + caption)."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+photo-frame-types = { workspace = true }
+image             = { workspace = true }
+imageproc         = { workspace = true }
+ab_glyph          = { workspace = true }
+thiserror         = { workspace = true }
+tracing           = { workspace = true }
+
+[lints]
+workspace = true
