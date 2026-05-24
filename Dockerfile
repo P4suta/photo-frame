@@ -15,58 +15,82 @@ ENV DEBIAN_FRONTEND=noninteractive \
     BUN_INSTALL=/usr/local \
     PATH=/usr/local/bin:$PATH
 
-RUN apt-get update \
+# ── apt with cache mount ─────────────────────────────────────────────────
+# BuildKit cache mount keeps the apt package cache + lists between Docker
+# builds. `rm -rf /var/lib/apt/lists/*` would defeat the cache, so we keep
+# the lists inside the cache mount instead and avoid the extra cleanup
+# step. The image carries zero apt cache thanks to the mount being
+# external to the layer.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean \
+ && apt-get update \
  && apt-get install -y --no-install-recommends \
         ca-certificates curl git pkg-config libssl-dev build-essential \
         unzip xz-utils \
-        libheif-dev clang \
- && rm -rf /var/lib/apt/lists/*
+        libheif-dev clang
 
 # libheif-dev backs the opt-in `heif` cargo feature on photo-frame-decode
 # (HEIC / HEIF input). The default cargo build does not require it; only
 # `cargo build -p photo-frame-decode --features heif` does. clang is here
 # because libheif-sys runs bindgen at build time and needs libclang.
 
-# bun (Zig-based JS runtime + package manager). Replaces Node.js + npm
-# entirely: bun runs Vite, installs deps from package.json, manages the
-# bun.lockb lockfile. Latest at build time per the workspace's "track
-# upstream" policy.
-#
-# We also symlink `node` → `bun` so that JS shebang lines (`#!/usr/bin/env
-# node`) inside packages installed globally by bun (lefthook etc.) can
-# find a runtime. bun is node-compatible enough to dispatch those scripts.
+# ── bun ──────────────────────────────────────────────────────────────────
+# Zig-based JS runtime + package manager. Replaces Node.js + npm entirely:
+# bun runs Vite, installs deps from package.json, manages the bun.lock
+# lockfile. Latest at build time per the workspace's "track upstream"
+# policy. We also symlink `node` → `bun` so that JS shebang lines
+# (`#!/usr/bin/env node`) inside packages installed globally by bun
+# (lefthook etc.) can find a runtime.
 RUN curl -fsSL https://bun.sh/install | bash \
  && bun --version \
  && ln -sf "$(which bun)" /usr/local/bin/node
 
-# Rust components & WASM target
+# ── Rust toolchain components ────────────────────────────────────────────
 RUN rustup component add clippy rustfmt \
  && rustup target add wasm32-unknown-unknown
 
-# Cargo-installed CLI tooling — latest at image build time.
-# Renovate bumps via the Cargo.toml workspace deps elsewhere; here we deliberately
-# pull "latest" so each Docker rebuild picks up the newest CLI.
-RUN cargo install --locked just \
- && cargo install --locked taplo-cli \
- && cargo install --locked typos-cli \
- && cargo install --locked wasm-pack \
- && cargo install --locked cargo-deny \
- && cargo install --locked cargo-nextest \
- && cargo install --locked hyperfine
+# ── Cargo tooling via cargo-binstall ─────────────────────────────────────
+# cargo-binstall fetches precompiled GitHub-release binaries instead of
+# building each tool from source. Tradeoff: a one-time cost to install
+# cargo-binstall itself (≈25 s), then every subsequent tool drops from
+# minutes (compile) to seconds (download + extract).
+#
+# BuildKit cache mounts on /usr/local/cargo/{registry,git} preserve the
+# downloaded crate metadata + .crate cache across Docker rebuilds so a
+# Dockerfile edit doesn't force every tool to refetch.
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    cargo install --locked cargo-binstall
 
-# biome (Rust, npm-published) and lefthook (Go, npm-published). bun is
-# npm-compatible so a single `bun install -g` covers both — no need to
-# resurrect Node.js or chase per-tool binary release URLs.
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    cargo binstall --no-confirm --no-symlinks --force \
+        just \
+        taplo-cli \
+        typos-cli \
+        wasm-pack \
+        cargo-deny \
+        cargo-nextest \
+        hyperfine
+
+# ── npm-published tooling (biome + lefthook) ─────────────────────────────
+# bun is npm-compatible so a single `bun install -g` covers both — no need
+# to resurrect Node.js or chase per-tool binary release URLs.
 RUN bun install -g @biomejs/biome lefthook \
  && biome --version \
  && lefthook version
 
-# Non-root user matching host UID/GID for clean bind-mount permissions.
-ARG USER_UID=1000
-ARG USER_GID=1000
-RUN groupadd --gid ${USER_GID} dev \
- && useradd  --uid ${USER_UID} --gid ${USER_GID} --shell /bin/bash --create-home dev \
- && mkdir -p /workspace \
+# ── Non-root user ────────────────────────────────────────────────────────
+# Matches host UID/GID for clean bind-mount permissions. ARG names are
+# HOST_UID / HOST_GID (not UID / GID) because `UID` is a readonly bash
+# variable on the host shell — using it as a compose arg breaks
+# `docker compose build` from bash. See docker-compose.yml.
+ARG HOST_UID=1000
+ARG HOST_GID=1000
+RUN groupadd --gid ${HOST_GID} dev \
+ && useradd  --uid ${HOST_UID} --gid ${HOST_GID} --shell /bin/bash --create-home dev \
+ && mkdir -p /workspace /home/dev/.cargo/registry /home/dev/.cargo/git \
  && chown -R dev:dev /workspace /home/dev
 
 USER dev

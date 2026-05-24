@@ -87,6 +87,7 @@ medians and the delta (negative = faster, positive = regression).
 | baseline | `8974cc6` | 0.08 s | 14.73 s | 0.10 s | 18.45 s | 1.00 s\* | \*warm rebuild; cold not measured (cache invalidation cost) |
 | Phase 1.2 (profiles) | post-1.2 | 0.08 s | **1.15 s** | 0.10 s | _re-measure_ | — | **-92% on test** — `package."*"` at -O3 on dev+test profile |
 | Phase 1.3 (nextest) | post-1.3 | 0.08 s | 1.33 s | 0.10 s | — | — | +180 ms vs cargo test (overhead) but enables CI JUnit / retries / per-test timing |
+| Phase 1.4 (docker) | post-1.4 | 0.08 s | 1.33 s | 0.10 s | **5.00 s** | 1.00 s\* | container `just ci` -73% (mostly Phase 1.2 propagating into container); BuildKit cache mounts + cargo-binstall + UID fix |
 
 ## Negative results (changes investigated but not shipped)
 

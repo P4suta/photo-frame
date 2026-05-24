@@ -4,12 +4,28 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        USER_UID: ${UID:-1000}
-        USER_GID: ${GID:-1000}
+        # `UID` is a readonly bash variable on the host (`UID=$(id -u) docker
+        # compose build` fails with "UID: readonly variable"). Renamed to
+        # HOST_UID / HOST_GID — these are picked up from the environment
+        # if exported, otherwise fall back to 1000 (standard Linux user).
+        HOST_UID: ${HOST_UID:-1000}
+        HOST_GID: ${HOST_GID:-1000}
     image: photo-frame-dev:latest
     container_name: photo-frame-dev
+    # Run as the matching UID so files created by the container don't
+    # appear root-owned to the host. The Dockerfile's `USER dev` switch
+    # provides the right UID inside the image but compose's explicit user
+    # override here also covers `docker compose run` invocations.
+    user: '${HOST_UID:-1000}:${HOST_GID:-1000}'
     volumes:
       - .:/workspace:cached
+      # Per-volume named caches survive across container restarts so cargo
+      # doesn't re-fetch the registry every session. Permissions on these
+      # volumes are initialised in the Dockerfile's USER dev step (mkdir +
+      # chown), but `docker compose up` recreates the mount with mode 755
+      # owned by the volume's first writer — for the dev user that's fine
+      # because the image already created /home/dev/.cargo with the right
+      # ownership.
       - cargo-registry:/home/dev/.cargo/registry
       - cargo-git:/home/dev/.cargo/git
       - target-cache:/workspace/target
