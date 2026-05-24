@@ -11,7 +11,7 @@ use std::process::ExitCode;
 
 use clap::{ArgAction, Parser, ValueEnum};
 use miette::{Diagnostic, Result, WrapErr};
-use photo_frame::frame::{Background, MetaPolicy};
+use photo_frame::frame::{FrameTheme, MetaPolicy};
 use photo_frame::{pipeline, Categorize, Category, PipelineError, PipelineOptions, QualityPreset};
 use thiserror::Error;
 use tracing::{error, info, instrument, Level};
@@ -50,9 +50,11 @@ struct Cli {
     #[arg(long)]
     no_meta: bool,
 
-    /// Frame background colour as `#RRGGBB` or `RRGGBB`.
-    #[arg(short, long, value_name = "HEX", default_value = "#FFFFFF", value_parser = parse_hex_color)]
-    background: Background,
+    /// Frame theme (preset that pairs border colour and caption text
+    /// colour). `paper` = white frame + dark text (the v1 look),
+    /// `ink` = soft-black frame + soft-white text.
+    #[arg(long, value_enum, default_value_t = CliTheme::Paper)]
+    theme: CliTheme,
 
     /// Increase log verbosity (`-v`=debug, `-vv`=trace).
     #[arg(short, long, action = ArgAction::Count, conflicts_with = "quiet")]
@@ -96,6 +98,26 @@ enum CliPreset {
     Standard,
     /// Highest quality, no downscale.
     Maximum,
+}
+
+/// CLI-facing alias for [`FrameTheme`] — clap value-enum needs to own
+/// the type it parses into. We could `impl ValueEnum for FrameTheme`
+/// in the library, but that drags clap into the library crate; an
+/// adapter enum here keeps the lib clean.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+#[clap(rename_all = "lowercase")]
+enum CliTheme {
+    Paper,
+    Ink,
+}
+
+impl From<CliTheme> for FrameTheme {
+    fn from(value: CliTheme) -> Self {
+        match value {
+            CliTheme::Paper => Self::Paper,
+            CliTheme::Ink => Self::Ink,
+        }
+    }
 }
 
 impl From<CliPreset> for QualityPreset {
@@ -148,28 +170,6 @@ impl Categorize for CliIoError {
     fn category(&self) -> Category {
         Category::Input
     }
-}
-
-/// Hex-colour parse error used as a clap `value_parser` result. miette
-/// renders it identically to the workspace pipeline errors.
-#[derive(Debug, Error, Diagnostic)]
-enum HexColorError {
-    #[error("colour must be 6 hex digits (e.g. #FFFFFF); got `{got}`")]
-    #[diagnostic(
-        code(photo_frame::cli::hex_color::length),
-        help("Strip whitespace and use the `#RRGGBB` form, e.g. #FFFFFF or 1A2B3C.")
-    )]
-    BadLength { got: String },
-    #[error("colour component `{component}` is not valid hex: {source}")]
-    #[diagnostic(
-        code(photo_frame::cli::hex_color::digits),
-        help("Each pair of hex digits must be 0-9 / a-f / A-F.")
-    )]
-    BadDigit {
-        component: &'static str,
-        #[source]
-        source: std::num::ParseIntError,
-    },
 }
 
 fn main() -> ExitCode {
@@ -243,7 +243,7 @@ fn build_options(cli: &Cli) -> PipelineOptions {
     if cli.max_long_edge.is_some() {
         opts.frame.max_long_edge = cli.max_long_edge;
     }
-    opts.frame.background = cli.background;
+    opts.frame.theme = cli.theme.into();
     opts.frame.meta_policy = if cli.no_meta {
         MetaPolicy::Never
     } else {
@@ -352,11 +352,6 @@ fn exit_code_for(err: &(dyn std::error::Error + 'static)) -> u8 {
         if let Some(p) = e.downcast_ref::<photo_frame::PixelError>() {
             return Some(p.category());
         }
-        if let Some(p) = e.downcast_ref::<HexColorError>() {
-            // Hex-colour errors are always Input.
-            let _ = p;
-            return Some(Category::Input);
-        }
         if let Some(p) = e.downcast_ref::<CliIoError>() {
             return Some(p.category());
         }
@@ -396,60 +391,26 @@ fn is_existing_dir(path: &Path) -> bool {
     std::fs::metadata(path).is_ok_and(|m| m.is_dir())
 }
 
-fn parse_hex_color(s: &str) -> std::result::Result<Background, HexColorError> {
-    let hex = s.strip_prefix('#').unwrap_or(s);
-    if hex.len() != 6 {
-        return Err(HexColorError::BadLength { got: s.to_owned() });
-    }
-    let r = u8::from_str_radix(&hex[0..2], 16).map_err(|source| HexColorError::BadDigit {
-        component: "red",
-        source,
-    })?;
-    let g = u8::from_str_radix(&hex[2..4], 16).map_err(|source| HexColorError::BadDigit {
-        component: "green",
-        source,
-    })?;
-    let b = u8::from_str_radix(&hex[4..6], 16).map_err(|source| HexColorError::BadDigit {
-        component: "blue",
-        source,
-    })?;
-    Ok(Background::from_rgb(r, g, b))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{build_options, exit_code_for, parse_hex_color, Cli, CliPreset, HexColorError};
+    use super::{build_options, exit_code_for, Cli, CliPreset};
     use clap::Parser;
-    use photo_frame::frame::Background;
+    use photo_frame::frame::FrameTheme;
     use photo_frame::{DecodeError, PipelineError, QualityPreset};
 
     #[test]
-    fn parses_hex_with_hash() {
-        assert_eq!(
-            parse_hex_color("#ff8040").unwrap(),
-            Background::from_rgb(255, 128, 64)
-        );
+    fn theme_defaults_to_paper() {
+        let cli = Cli::try_parse_from(["photo-frame", "photo.jpg"]).unwrap();
+        let opts = build_options(&cli);
+        assert_eq!(opts.frame.theme, FrameTheme::Paper);
     }
 
     #[test]
-    fn parses_hex_without_hash() {
-        assert_eq!(parse_hex_color("FFFFFF").unwrap(), Background::WHITE);
-    }
-
-    #[test]
-    fn rejects_short_input() {
-        assert!(matches!(
-            parse_hex_color("#FFF"),
-            Err(HexColorError::BadLength { .. })
-        ));
-    }
-
-    #[test]
-    fn rejects_non_hex() {
-        assert!(matches!(
-            parse_hex_color("#GGGGGG"),
-            Err(HexColorError::BadDigit { .. })
-        ));
+    fn theme_ink_flag_flips_preset() {
+        let cli =
+            Cli::try_parse_from(["photo-frame", "--theme", "ink", "photo.jpg"]).unwrap();
+        let opts = build_options(&cli);
+        assert_eq!(opts.frame.theme, FrameTheme::Ink);
     }
 
     #[test]

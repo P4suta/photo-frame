@@ -7,11 +7,17 @@
 
 import init, { frame } from '../pkg/photo_frame_wasm.js';
 
+/**
+ * Frame theme — pair of border colour and caption text colour.
+ * The string values mirror `FrameTheme::label()` on the Rust side
+ * (`crates/photo-frame-frame/src/options.rs`); the WASM bridge parses
+ * them back into the typed enum and rejects anything else.
+ */
+export type FrameTheme = 'paper' | 'ink';
+
 export type FrameOptions = {
   jpeg_quality: number;
-  bg_r: number;
-  bg_g: number;
-  bg_b: number;
+  theme: FrameTheme;
   show_meta: boolean;
   max_long_edge: number | null;
 };

@@ -16,7 +16,7 @@ mod options;
 mod render;
 mod text;
 
-pub use crate::options::{Background, FrameOptions, MetaPolicy};
+pub use crate::options::{FrameOptions, FrameTheme, MetaPolicy};
 pub use photo_frame_types::{Photograph, Pixels};
 
 /// Render `photo` into a framed RGBA8 grid.

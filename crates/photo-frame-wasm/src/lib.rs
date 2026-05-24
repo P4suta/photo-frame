@@ -15,7 +15,7 @@ use std::error::Error;
 use std::fmt::Write;
 
 use photo_frame::encode::JpegOptions;
-use photo_frame::frame::{Background, FrameOptions, MetaPolicy};
+use photo_frame::frame::{FrameOptions, FrameTheme, MetaPolicy};
 use photo_frame::{pipeline, PipelineError, PipelineOptions};
 use serde::Deserialize;
 use tracing::{error, info};
@@ -58,9 +58,22 @@ pub fn frame(bytes: &[u8], options: JsValue) -> Result<Vec<u8>, JsError> {
         );
         JsError::new(&format!("invalid options: {e}"))
     })?;
+    let theme = match parse_theme(&opts.theme) {
+        Ok(t) => t,
+        Err(unknown) => {
+            error!(
+                event_id = "wasm.frame.theme_invalid",
+                theme = %unknown,
+                "unknown theme; expected `paper` or `ink`",
+            );
+            return Err(JsError::new(&format!(
+                "invalid theme `{unknown}`: expected `paper` or `ink`"
+            )));
+        },
+    };
     let pipeline_opts = PipelineOptions {
         frame: FrameOptions {
-            background: Background::from_rgb(opts.bg_r, opts.bg_g, opts.bg_b),
+            theme,
             meta_policy: if opts.show_meta {
                 MetaPolicy::Auto
             } else {
@@ -95,14 +108,38 @@ fn display_chain(err: &PipelineError) -> String {
     message
 }
 
-/// JS-facing options shape. Flattens the RGB triple so JSON object
-/// construction is straightforward on the browser side.
+/// JS-facing options shape. `theme` is the kebab-case label exposed by
+/// [`FrameTheme::label`] (`"paper"` / `"ink"`); see [`parse_theme`].
 #[derive(Debug, Deserialize)]
 struct JsOptions {
     jpeg_quality: u8,
-    bg_r: u8,
-    bg_g: u8,
-    bg_b: u8,
+    theme: String,
     show_meta: bool,
     max_long_edge: Option<u32>,
+}
+
+/// Map the JS-side theme label back to the typed enum. Returns the
+/// offending string so the caller can name it in the diagnostic.
+fn parse_theme(raw: &str) -> Result<FrameTheme, &str> {
+    match raw {
+        s if s == FrameTheme::Paper.label() => Ok(FrameTheme::Paper),
+        s if s == FrameTheme::Ink.label() => Ok(FrameTheme::Ink),
+        other => Err(other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_theme, FrameTheme};
+
+    #[test]
+    fn parse_theme_accepts_known_labels() {
+        assert_eq!(parse_theme("paper").unwrap(), FrameTheme::Paper);
+        assert_eq!(parse_theme("ink").unwrap(), FrameTheme::Ink);
+    }
+
+    #[test]
+    fn parse_theme_rejects_unknown() {
+        assert_eq!(parse_theme("midnight"), Err("midnight"));
+    }
 }
