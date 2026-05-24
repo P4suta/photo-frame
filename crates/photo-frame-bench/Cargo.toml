@@ -1,0 +1,33 @@
+[package]
+name                   = "photo-frame-bench"
+description            = "Criterion benchmarks for the photo-frame pipeline (decode/frame/encode hot paths)."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+publish                = false
+
+[lib]
+path = "src/lib.rs"
+# A bench-only crate: no tests, no doc.
+test = false
+bench = true
+doc = false
+
+[dev-dependencies]
+photo-frame        = { workspace = true }
+photo-frame-decode = { workspace = true }
+photo-frame-encode = { workspace = true }
+photo-frame-frame  = { workspace = true }
+photo-frame-types  = { workspace = true }
+image              = { workspace = true }
+criterion          = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name    = "pipeline"
+harness = false
+
+[lints]
+workspace = true

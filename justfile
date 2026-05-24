@@ -83,6 +83,55 @@ run *args:
 build-release:
     cargo build -p photo-frame-cli --release
 
+# ── Dev inner loop ──────────────────────────────────────────────────────
+
+# Start bacon in clippy-all mode (warnings denied, full workspace).
+# Switch jobs with single-letter keys inside bacon: t = test, c =
+# clippy-all, d = doc-tests, r = run.
+dev:
+    bacon
+
+# Watch + run tests on every save. Equivalent to bacon's `test` job.
+watch:
+    bacon test
+
+# ── Quality / measurement ───────────────────────────────────────────────
+
+# Run hyperfine measurement of the host + container bench matrix and
+# print summary. See BENCHMARKS.md for the curated history.
+bench-measure variant="all":
+    scripts/bench-build.sh {{ variant }}
+
+# Run the criterion benchmark suite (pipeline hot paths). HTML report
+# lands in target/criterion/<bench>/report/index.html.
+bench:
+    cargo bench -p photo-frame-bench
+
+# End-to-end CLI tests (binary-level subprocess + stdout / stderr /
+# exit code assertions). WASM playwright suite lives separately under
+# crates/photo-frame-wasm/www/tests/e2e/ (not yet wired in).
+e2e:
+    cargo nextest run -p photo-frame-cli --test e2e
+
+# Line / branch coverage via cargo-llvm-cov. Output: lcov.info.
+cov:
+    cargo llvm-cov --workspace --lcov --output-path lcov.info
+
+# Doc generation for the whole workspace (no deps, public surface only).
+docs:
+    cargo doc --workspace --no-deps --open
+
+# Show outdated workspace deps (root-only so we don't drown in
+# transitive churn).
+outdated:
+    cargo outdated --workspace --root-deps-only
+
+# Verify the rust-version pin in workspace Cargo.toml is satisfiable
+# by the actual code (catches accidental edition-2024 / new-stdlib
+# regressions on the MSRV path).
+msrv:
+    cargo msrv verify
+
 # ── Docker images ────────────────────────────────────────────────────────
 
 # Build the slim runtime image for distribution. Drives the multi-stage
