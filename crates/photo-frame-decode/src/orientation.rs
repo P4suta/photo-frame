@@ -22,20 +22,41 @@ use image::{metadata::Orientation, DynamicImage};
 /// but explicitly unspecified — both are silent no-ops.
 pub(crate) fn apply(img: &mut DynamicImage, raw: Option<u32>) {
     let Some(raw) = raw else {
+        tracing::trace!(
+            event_id = "decode.orientation.absent",
+            "EXIF Orientation tag not present; assuming upright"
+        );
         return;
     };
     if raw == 0 {
+        tracing::trace!(
+            event_id = "decode.orientation.unspecified",
+            "EXIF Orientation tag = 0 (unspecified); assuming upright"
+        );
         return;
     }
     let Ok(raw_u8) = u8::try_from(raw) else {
-        tracing::warn!(raw, "EXIF Orientation value out of u8 range");
+        tracing::warn!(
+            event_id = "decode.orientation.overflow",
+            raw,
+            "EXIF Orientation value out of u8 range; assuming upright"
+        );
         return;
     };
     let Some(orientation) = Orientation::from_exif(raw_u8) else {
-        tracing::warn!(raw, "unknown EXIF Orientation; treating as identity");
+        tracing::warn!(
+            event_id = "decode.orientation.unknown",
+            raw,
+            "unknown EXIF Orientation; treating as identity"
+        );
         return;
     };
-    tracing::debug!(raw, applied = ?orientation, "orientation applied");
+    tracing::debug!(
+        event_id = "decode.orientation.applied",
+        raw,
+        applied = ?orientation,
+        "orientation applied"
+    );
     img.apply_orientation(orientation);
 }
 
@@ -143,8 +164,13 @@ mod tests {
     #[test]
     #[traced_test]
     fn raw_zero_does_not_warn() {
+        // raw = 0 is "unspecified" per EXIF spec — a no-op. A trace
+        // event records the branch (useful at -vvv) but neither
+        // "out of u8 range" nor "unknown EXIF Orientation" — the two
+        // warn messages — should fire.
         let mut img = coded();
         apply(&mut img, Some(0));
-        assert!(!logs_contain("EXIF Orientation"));
+        assert!(!logs_contain("out of u8 range"));
+        assert!(!logs_contain("unknown EXIF Orientation"));
     }
 }

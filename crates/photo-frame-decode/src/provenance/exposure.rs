@@ -31,6 +31,10 @@ pub(crate) fn exposure(exif: &Exif) -> Option<Exposure> {
         && exp.shutter_seconds.is_none()
         && exp.iso.is_none()
     {
+        tracing::debug!(
+            event_id = "decode.exif.exposure.absent",
+            "no exposure facts present (focal/aperture/shutter/iso all missing); exposure = None"
+        );
         return None;
     }
     Some(exp)

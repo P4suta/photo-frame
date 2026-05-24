@@ -63,8 +63,28 @@ struct Cli {
     quiet: bool,
 
     /// Emit one JSON event per line to stderr instead of pretty text.
+    /// Deprecated: prefer `--log-format json`. Honoured as a shortcut
+    /// for `--log-format json` for backward compatibility.
     #[arg(long)]
     json: bool,
+
+    /// Tracing-event output format on stderr.
+    ///
+    /// - `pretty`: default; multi-line, ANSI-coloured, human-friendly
+    /// - `compact`: single-line per event, no ANSI; good for terminals
+    ///   that don't render colour
+    /// - `json`: one JSON object per line; structured fields preserved;
+    ///   CI / log-aggregator friendly
+    #[arg(long, value_enum)]
+    log_format: Option<LogFormat>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+#[clap(rename_all = "lowercase")]
+enum LogFormat {
+    Pretty,
+    Compact,
+    Json,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -155,7 +175,7 @@ enum HexColorError {
 fn main() -> ExitCode {
     install_panic_hook();
     let cli = Cli::parse();
-    init_tracing(cli.verbose, cli.quiet, cli.json);
+    init_tracing(cli.verbose, cli.quiet, resolve_log_format(&cli));
 
     match run(&cli) {
         Ok(()) => ExitCode::SUCCESS,
@@ -167,7 +187,7 @@ fn main() -> ExitCode {
             // Walk the cause chain looking for the first Categorize-
             // capable error to derive the exit code.
             ExitCode::from(exit_code_for(err.as_ref()))
-        }
+        },
     }
 }
 
@@ -254,7 +274,20 @@ fn process_one(input: &Path, output: &Path, opts: &PipelineOptions) -> Result<()
     Ok(())
 }
 
-fn init_tracing(verbose: u8, quiet: bool, json: bool) {
+/// Decide which log format the subscriber should produce.
+/// `--log-format` wins outright; `--json` is honoured as a back-compat
+/// shortcut for `json`; otherwise default to `pretty`.
+fn resolve_log_format(cli: &Cli) -> LogFormat {
+    cli.log_format.unwrap_or({
+        if cli.json {
+            LogFormat::Json
+        } else {
+            LogFormat::Pretty
+        }
+    })
+}
+
+fn init_tracing(verbose: u8, quiet: bool, format: LogFormat) {
     let default = if quiet {
         Level::WARN
     } else {
@@ -267,24 +300,38 @@ fn init_tracing(verbose: u8, quiet: bool, json: bool) {
     let filter = EnvFilter::try_from_env("PHOTO_FRAME_LOG")
         .unwrap_or_else(|_| EnvFilter::new(default.to_string()));
     let registry = tracing_subscriber::registry().with(filter);
-    if json {
-        registry
-            .with(
-                fmt::layer()
-                    .json()
-                    .with_writer(std::io::stderr)
-                    .with_target(false),
-            )
-            .init();
-    } else {
-        registry
-            .with(
-                fmt::layer()
-                    .with_writer(std::io::stderr)
-                    .with_target(false)
-                    .with_timer(fmt::time::uptime()),
-            )
-            .init();
+    let writer = std::io::stderr;
+    // The three formats share the same EnvFilter; only the layer's
+    // event renderer differs. `target: true` lifts the structured event
+    // name (e.g. `decode.orientation.applied`) into the output so
+    // grep/jq pipelines can filter on it.
+    match format {
+        LogFormat::Pretty => {
+            registry
+                .with(
+                    fmt::layer()
+                        .with_writer(writer)
+                        .with_target(true)
+                        .with_timer(fmt::time::uptime()),
+                )
+                .init();
+        },
+        LogFormat::Compact => {
+            registry
+                .with(
+                    fmt::layer()
+                        .compact()
+                        .with_writer(writer)
+                        .with_target(true)
+                        .with_timer(fmt::time::uptime()),
+                )
+                .init();
+        },
+        LogFormat::Json => {
+            registry
+                .with(fmt::layer().json().with_writer(writer).with_target(true))
+                .init();
+        },
     }
 }
 

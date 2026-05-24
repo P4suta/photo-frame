@@ -27,7 +27,15 @@ pub(crate) fn detect(bytes: &[u8]) -> DetectedFormat {
     // a `DetectedFormat` we cannot actually decode.
     match image::guess_format(bytes) {
         Ok(fmt) if is_supported(fmt) => DetectedFormat::Image(fmt),
-        _ => DetectedFormat::Unknown,
+        Ok(fmt) => {
+            tracing::debug!(
+                event_id = "decode.format.unsupported",
+                detected = ?fmt,
+                "image::guess_format recognised an unsupported variant; treating as Unknown"
+            );
+            DetectedFormat::Unknown
+        },
+        Err(_) => DetectedFormat::Unknown,
     }
 }
 
