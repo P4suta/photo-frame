@@ -25,10 +25,7 @@ export const ensureWasm = (): Promise<void> => {
 };
 
 /** Frame `bytes` and return a JPEG `Blob`. */
-export const frameImage = async (
-  bytes: Uint8Array,
-  opts: FrameOptions,
-): Promise<Blob> => {
+export const frameImage = async (bytes: Uint8Array, opts: FrameOptions): Promise<Blob> => {
   await ensureWasm();
   const out = frame(bytes, opts);
   // TS 5.x's Blob refuses Uint8Array<ArrayBufferLike> directly; copy into a

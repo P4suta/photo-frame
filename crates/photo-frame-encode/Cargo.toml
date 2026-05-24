@@ -1,6 +1,6 @@
 [package]
-name        = "photo-frame-encode"
-description = "Encode a Pixels grid to a chosen output format (currently JPEG only)."
+name                   = "photo-frame-encode"
+description            = "Encode a Pixels grid to a chosen output format (currently JPEG only)."
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true

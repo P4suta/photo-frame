@@ -2,7 +2,7 @@
 //!
 //! The reader distinguishes three outcomes:
 //! - [`ExifReadOutcome::Absent`] — the container simply has no EXIF
-//!   segment (most PNGs, screenshots, etc.). Silent: no event emitted.
+//!   segment (most PNG files, screenshots, etc.). Silent: no event emitted.
 //! - [`ExifReadOutcome::Parsed`] — kamadak-exif handed back a valid
 //!   [`exif::Exif`] we can walk.
 //! - [`ExifReadOutcome::Malformed`] — EXIF was present but the parser

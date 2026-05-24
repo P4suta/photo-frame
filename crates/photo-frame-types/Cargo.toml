@@ -1,6 +1,6 @@
 [package]
-name        = "photo-frame-types"
-description = "Canonical data types shared across the photo-frame pipeline."
+name                   = "photo-frame-types"
+description            = "Canonical data types shared across the photo-frame pipeline."
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true

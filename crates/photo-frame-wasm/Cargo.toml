@@ -1,6 +1,6 @@
 [package]
-name        = "photo-frame-wasm"
-description = "WASM bindings for photo-frame, intended for browser use."
+name                   = "photo-frame-wasm"
+description            = "WASM bindings for photo-frame, intended for browser use."
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true

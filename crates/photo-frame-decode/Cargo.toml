@@ -1,6 +1,6 @@
 [package]
-name        = "photo-frame-decode"
-description = "Decode arbitrary input formats into a canonical Photograph."
+name                   = "photo-frame-decode"
+description            = "Decode arbitrary input formats into a canonical Photograph."
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true

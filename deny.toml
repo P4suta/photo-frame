@@ -11,7 +11,7 @@
 # Adding a new entry here is a one-way ratchet — discuss before relaxing.
 
 [graph]
-all-features = false
+all-features        = false
 no-default-features = false
 
 [bans]
@@ -19,14 +19,14 @@ multiple-versions = "allow" # the dep graph naturally has dupes; not our fight
 wildcards = "allow"
 highlight = "all"
 deny = [
-    { name = "cc"          },
-    { name = "cc-rs"       },
-    { name = "bindgen"     },
-    { name = "pkg-config"  },
-    { name = "vcpkg"       },
-    { name = "cmake"       },
-    { name = "autotools"   },
-    { name = "meson"       },
+    { name = "cc" },
+    { name = "cc-rs" },
+    { name = "bindgen" },
+    { name = "pkg-config" },
+    { name = "vcpkg" },
+    { name = "cmake" },
+    { name = "autotools" },
+    { name = "meson" },
 ]
 # Note on the opt-in `heif` cargo feature: enabling it on
 # `photo-frame-decode` pulls in `libheif-rs` → `libheif-sys`, which in
@@ -49,9 +49,9 @@ confidence-threshold   = 0.93
 [advisories]
 # Advisories are a separate concern from C-purity; we let `cargo deny check
 # advisories` warn but gate CI only on `bans`.
-yanked          = "warn"
-unmaintained    = "workspace"
-ignore          = []
+yanked       = "warn"
+unmaintained = "workspace"
+ignore       = []
 
 [sources]
 unknown-registry = "deny"

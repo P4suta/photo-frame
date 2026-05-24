@@ -1,13 +1,14 @@
 {
-  "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.4.15/schema.json",
   "files": {
-    "ignore": [
-      "**/node_modules",
-      "**/pkg",
-      "**/dist",
-      "**/target",
-      "**/.vite",
-      "**/coverage"
+    "includes": [
+      "**",
+      "!**/node_modules",
+      "!**/pkg",
+      "!**/dist",
+      "!**/target",
+      "!**/.vite",
+      "!**/coverage"
     ]
   },
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
@@ -22,13 +23,16 @@
     "enabled": true,
     "rules": {
       "recommended": true,
+      "a11y": {
+        "useSemanticElements": "off"
+      },
       "style": {
         "noNonNullAssertion": "error",
         "useConst": "error",
         "useTemplate": "error"
       },
       "suspicious": {
-        "noConsoleLog": "warn"
+        "noConsole": { "level": "warn", "options": { "allow": ["log"] } }
       },
       "correctness": {
         "noUnusedVariables": "error",
@@ -44,5 +48,5 @@
       "arrowParentheses": "always"
     }
   },
-  "organizeImports": { "enabled": true }
+  "assist": { "actions": { "source": { "organizeImports": "on" } } }
 }

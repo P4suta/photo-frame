@@ -1,6 +1,6 @@
 [package]
-name        = "photo-frame"
-description = "Liit-style golden-ratio photo framing — facade re-exporting the decode/frame/encode pipeline."
+name                   = "photo-frame"
+description            = "Liit-style golden-ratio photo framing — facade re-exporting the decode/frame/encode pipeline."
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true

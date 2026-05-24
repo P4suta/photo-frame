@@ -45,10 +45,10 @@ jobs:
           # Ship the bundled font's full upstream attribution alongside the WASM
           # output, exactly as Vercel published it.
           mkdir -p dist/fonts/Geist
-          cp ../../photo-frame-core/assets/fonts/Geist/LICENSE.txt        dist/fonts/Geist/
-          cp ../../photo-frame-core/assets/fonts/Geist/OFL.txt            dist/fonts/Geist/
-          cp ../../photo-frame-core/assets/fonts/Geist/AUTHORS.txt        dist/fonts/Geist/
-          cp ../../photo-frame-core/assets/fonts/Geist/CONTRIBUTORS.txt   dist/fonts/Geist/
+          cp ../../photo-frame-frame/assets/fonts/Geist/LICENSE.txt        dist/fonts/Geist/
+          cp ../../photo-frame-frame/assets/fonts/Geist/OFL.txt            dist/fonts/Geist/
+          cp ../../photo-frame-frame/assets/fonts/Geist/AUTHORS.txt        dist/fonts/Geist/
+          cp ../../photo-frame-frame/assets/fonts/Geist/CONTRIBUTORS.txt   dist/fonts/Geist/
 
       - uses: actions/upload-pages-artifact@v3
         with:
