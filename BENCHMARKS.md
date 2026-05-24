@@ -86,6 +86,33 @@ medians and the delta (negative = faster, positive = regression).
 | ----- | -------- | ----------------------: | ----------------: | ------------: | ------------------: | ------------------: | ----- |
 | baseline | `8974cc6` | 0.08 s | 14.73 s | 0.10 s | 18.45 s | 1.00 s\* | \*warm rebuild; cold not measured (cache invalidation cost) |
 
+## Negative results (changes investigated but not shipped)
+
+Data-driven means we also record what *didn't* move the needle, so a
+future contributor doesn't waste effort re-investigating the same
+optimisation.
+
+### mold linker (planned Phase 1.1) — **0% improvement, skipped**
+
+Measured on host with `gcc -fuse-ld=mold` (mold 2.41.0 via mise) vs.
+default GNU `ld`. Trigger: `touch crates/photo-frame-cli/src/main.rs`
+then `cargo build -p photo-frame-cli`.
+
+| Linker | dev relink (5 runs) | release relink (3 runs) |
+| ------ | ------------------: | ----------------------: |
+| GNU `ld` (default) | 404.1 ms ± 3.4 | 8.390 s ± 0.059 |
+| `mold` 2.41 | 404.7 ms ± 4.9 | 8.392 s ± 0.028 |
+
+The dev binary is 78 MB but the actual link step completes in ≲100 ms
+under either linker — cargo / rustc startup overhead dominates the
+wall-clock. The release build is dominated by LTO + codegen, not
+linking. Conclusion: mold's value (faster linking) does not apply at
+photo-frame's current scale; no `.cargo/config.toml` linker entry
+shipped. Re-measure if the workspace grows past ~10 crates with much
+larger binaries.
+
+Raw JSON: `artifacts/bench/mold_cli_relink.json` (kept locally).
+
 ## Targets (success criteria for the overhaul)
 
 | Metric | Baseline → target | Mechanism |
