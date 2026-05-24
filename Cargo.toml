@@ -19,20 +19,26 @@ repository   = "https://github.com/yasunobu/photo-frame"
 authors      = ["photo-frame contributors"]
 
 [workspace.dependencies]
-photo-frame-types   = { path = "crates/photo-frame-types" }
-photo-frame-decode  = { path = "crates/photo-frame-decode" }
-photo-frame-frame   = { path = "crates/photo-frame-frame" }
-photo-frame-encode  = { path = "crates/photo-frame-encode" }
-photo-frame         = { path = "crates/photo-frame" }
-image               = { version = "0.25", default-features = false, features = ["jpeg", "png", "tiff", "bmp", "webp"] }
-kamadak-exif        = "0.6"
-ab_glyph            = "0.2"
-imageproc           = { version = "0.25", default-features = false }
-thiserror           = "1"
-tracing             = { version = "0.1", default-features = false, features = ["std", "attributes"] }
-tracing-subscriber  = { version = "0.3", features = ["env-filter", "fmt", "json", "registry"] }
-clap                = { version = "4", features = ["derive"] }
-anyhow              = "1"
+photo-frame-types = { path = "crates/photo-frame-types" }
+photo-frame-decode = { path = "crates/photo-frame-decode" }
+photo-frame-frame = { path = "crates/photo-frame-frame" }
+photo-frame-encode = { path = "crates/photo-frame-encode" }
+photo-frame = { path = "crates/photo-frame" }
+image = { version = "0.25", default-features = false, features = [
+    "jpeg",
+    "png",
+    "tiff",
+    "bmp",
+    "webp",
+] }
+kamadak-exif = "0.6"
+ab_glyph = "0.2"
+imageproc = { version = "0.25", default-features = false }
+thiserror = "1"
+tracing = { version = "0.1", default-features = false, features = ["std", "attributes"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "registry"] }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
 
 [profile.release]
 lto           = "thin"

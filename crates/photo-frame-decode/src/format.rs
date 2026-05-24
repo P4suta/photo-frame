@@ -56,7 +56,7 @@ pub(crate) const fn name(detected: DetectedFormat) -> &'static str {
         DetectedFormat::Unknown => "unknown",
         // `detect` filters to the variants above, so this arm is structurally
         // unreachable. Keeping it explicit makes the `name` function total
-        // without relying on a wildcard that could quietly mis-label a new
+        // without relying on a wildcard that could quietly mislabel a new
         // `ImageFormat` variant added in a future `image` release.
         DetectedFormat::Image(_) => "other",
     }

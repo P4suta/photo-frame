@@ -1,6 +1,6 @@
 [package]
-name        = "photo-frame-frame"
-description = "Render a Photograph into a framed RGBA Pixels grid (golden-ratio layout + caption)."
+name                   = "photo-frame-frame"
+description            = "Render a Photograph into a framed RGBA Pixels grid (golden-ratio layout + caption)."
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true

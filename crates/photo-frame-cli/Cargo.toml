@@ -1,6 +1,6 @@
 [package]
-name        = "photo-frame-cli"
-description = "Command-line interface for photo-frame."
+name                   = "photo-frame-cli"
+description            = "Command-line interface for photo-frame."
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
@@ -14,7 +14,7 @@ path = "src/main.rs"
 
 [features]
 default = []
-heif = ["photo-frame/heif"]
+heif    = ["photo-frame/heif"]
 
 [dependencies]
 photo-frame        = { workspace = true }

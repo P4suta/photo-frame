@@ -202,7 +202,12 @@ export const App = () => {
               </label>
 
               <div class="control-row download-row">
-                <button type="button" class="primary" disabled={busy()} onClick={() => void onDownload()}>
+                <button
+                  type="button"
+                  class="primary"
+                  disabled={busy()}
+                  onClick={() => void onDownload()}
+                >
                   Download
                 </button>
               </div>

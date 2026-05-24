@@ -1,13 +1,22 @@
 include = ["**/*.toml"]
-exclude = ["target/**", "node_modules/**", "**/pkg/**", "**/dist/**"]
+exclude = [
+    "target/**",
+    "node_modules/**",
+    "**/pkg/**",
+    "**/dist/**",
+    # Ad-hoc cargo caches used during container-side heif verification
+    # (see .gitignore — these are bind-mount artefacts, not source).
+    ".cargo-cache-docker/**",
+    "target-docker/**",
+]
 
 [formatting]
-align_entries        = true
-array_auto_collapse  = true
-array_auto_expand    = true
-column_width         = 100
-indent_string        = "    "
-reorder_keys         = false
-trailing_newline     = true
-compact_arrays       = true
+align_entries         = true
+array_auto_collapse   = true
+array_auto_expand     = true
+column_width          = 100
+indent_string         = "    "
+reorder_keys          = false
+trailing_newline      = true
+compact_arrays        = true
 compact_inline_tables = false

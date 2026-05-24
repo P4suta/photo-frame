@@ -13,12 +13,16 @@ export const DropZone = (props: Props) => {
     props.onLoad(new Uint8Array(buffer), file.name);
   };
 
+  const openPicker = (): void => fileInput?.click();
+
   return (
-    <section
+    <button
+      type="button"
       id="drop-zone"
       class="drop"
       classList={{ over: over() }}
-      onClick={() => fileInput?.click()}
+      aria-label="Drop an image here or press Enter to open the file picker"
+      onClick={openPicker}
       onDragOver={(event) => {
         event.preventDefault();
         setOver(true);
@@ -48,6 +52,6 @@ export const DropZone = (props: Props) => {
         </span>
         .
       </p>
-    </section>
+    </button>
   );
 };
