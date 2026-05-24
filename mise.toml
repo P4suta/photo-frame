@@ -1,0 +1,23 @@
+# mise tool version pins.
+# Docs: https://mise.jdx.dev/
+#
+# Single source of truth for tool versions across host + container +
+# CI. `mise install` in the project root fetches and sets up each
+# tool below; Renovate's regexManager bumps the versions on schedule.
+#
+# Why mise (not asdf, not vendored binaries):
+#   - one-shot bootstrap on any Linux/macOS host
+#   - fast (Rust-based shims)
+#   - already used by the project author elsewhere
+#
+# Rust / cargo themselves come from rustup pin in the Dockerfile
+# (RUST_VERSION ARG); mise focuses on the auxiliary toolchain.
+
+[tools]
+# Tools the Dockerfile already installs via cargo-binstall — listed
+# here so a contributor working on the host (no Docker) can run
+# `mise install` and get the same versions. The Dockerfile remains
+# the source of truth for what's *in the container*; mise keeps host
+# parity reproducible.
+hyperfine     = "latest"
+jq            = "latest"

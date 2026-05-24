@@ -8,6 +8,7 @@ members = [
     "crates/photo-frame",
     "crates/photo-frame-cli",
     "crates/photo-frame-wasm",
+    "crates/photo-frame-bench",
 ]
 
 [workspace.package]
