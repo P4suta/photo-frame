@@ -95,6 +95,24 @@ Data-driven means we also record what *didn't* move the needle, so a
 future contributor doesn't waste effort re-investigating the same
 optimisation.
 
+### cargo-chef multi-stage Dockerfile (planned Phase 1.5) — not applicable, skipped
+
+cargo-chef precompiles the dependency graph into a cacheable Docker
+stage so changes to the application source don't trigger a full
+dependency recompile. It's the standard pattern for **production
+runtime images** that build & ship a Rust binary.
+
+For our `photo-frame-dev` image the source isn't COPYed in — it's
+bind-mounted at container start (`docker compose run -v .:/workspace`).
+The dependency cache that matters at iteration time lives in the
+`target-cache` named volume, *outside* the image. cargo-chef can't
+warm that volume because Docker initialises it lazily on first mount.
+
+Skip until/unless we ship a slim production runtime image of the CLI
+(`scratch` or `distroless` base + statically-linked photo-frame
+binary). Phase 1.4's BuildKit cache mounts already give us the
+registry/git cache without the cargo-chef ceremony.
+
 ### mold linker (planned Phase 1.1) — **0% improvement, skipped**
 
 Measured on host with `gcc -fuse-ld=mold` (mold 2.41.0 via mise) vs.
