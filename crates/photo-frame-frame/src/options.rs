@@ -60,6 +60,35 @@ impl FrameTheme {
     }
 }
 
+/// How the caption strip arranges its facets.
+///
+/// `Edges` keeps the original liit-style four-corner layout (camera
+/// / lens on the top row, exposure / date on the bottom). `Centered`
+/// joins each row with a `"  ·  "` separator and centres it under the
+/// photo — useful when the photo's subject sits central and a
+/// symmetric caption looks more deliberate.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum CaptionLayout {
+    /// Camera/lens at the top edges, exposure/date at the bottom
+    /// edges. The historical v1 + v2 default.
+    #[default]
+    Edges,
+    /// Both rows centred under the photo, with the same `"  ·  "`
+    /// separator used inside the exposure line.
+    Centered,
+}
+
+impl CaptionLayout {
+    /// Short kebab-case label used in tracing events + CLI/WASM parsing.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Edges => "edges",
+            Self::Centered => "centered",
+        }
+    }
+}
+
 /// Controls whether the metadata strip is rendered.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum MetaPolicy {
@@ -78,6 +107,7 @@ pub enum MetaPolicy {
 #[derive(Clone, Debug, Default)]
 pub struct FrameOptions {
     pub theme: FrameTheme,
+    pub layout: CaptionLayout,
     pub meta_policy: MetaPolicy,
     /// If set, downscale the photo so its longer edge is at most this many
     /// pixels before framing. Intended for browser previews and the SNS
@@ -87,15 +117,22 @@ pub struct FrameOptions {
 
 #[cfg(test)]
 mod tests {
-    use super::{FrameOptions, FrameTheme, MetaPolicy};
+    use super::{CaptionLayout, FrameOptions, FrameTheme, MetaPolicy};
     use image::Rgba;
 
     #[test]
-    fn default_options_are_paper_auto_meta_no_downscale() {
+    fn default_options_are_paper_edges_auto_meta_no_downscale() {
         let opts = FrameOptions::default();
         assert_eq!(opts.theme, FrameTheme::Paper);
+        assert_eq!(opts.layout, CaptionLayout::Edges);
         assert_eq!(opts.meta_policy, MetaPolicy::Auto);
         assert!(opts.max_long_edge.is_none());
+    }
+
+    #[test]
+    fn layout_labels_are_short_lowercase() {
+        assert_eq!(CaptionLayout::Edges.label(), "edges");
+        assert_eq!(CaptionLayout::Centered.label(), "centered");
     }
 
     #[test]

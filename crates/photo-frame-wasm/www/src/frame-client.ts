@@ -15,9 +15,17 @@ import init, { frame } from '../pkg/photo_frame_wasm.js';
  */
 export type FrameTheme = 'paper' | 'ink';
 
+/**
+ * Caption arrangement. Mirrors `CaptionLayout::label()` on the Rust
+ * side — `edges` is the four-corner liit-style row; `centered` joins
+ * each row with `·` and centres it.
+ */
+export type CaptionLayout = 'edges' | 'centered';
+
 export type FrameOptions = {
   jpeg_quality: number;
   theme: FrameTheme;
+  layout: CaptionLayout;
   show_meta: boolean;
   max_long_edge: number | null;
 };

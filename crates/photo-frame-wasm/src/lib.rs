@@ -15,7 +15,7 @@ use std::error::Error;
 use std::fmt::Write;
 
 use photo_frame::encode::JpegOptions;
-use photo_frame::frame::{FrameOptions, FrameTheme, MetaPolicy};
+use photo_frame::frame::{CaptionLayout, FrameOptions, FrameTheme, MetaPolicy};
 use photo_frame::{pipeline, PipelineError, PipelineOptions};
 use serde::Deserialize;
 use tracing::{error, info};
@@ -71,9 +71,23 @@ pub fn frame(bytes: &[u8], options: JsValue) -> Result<Vec<u8>, JsError> {
             )));
         },
     };
+    let layout = match parse_layout(&opts.layout) {
+        Ok(l) => l,
+        Err(unknown) => {
+            error!(
+                event_id = "wasm.frame.layout_invalid",
+                layout = %unknown,
+                "unknown layout; expected `edges` or `centered`",
+            );
+            return Err(JsError::new(&format!(
+                "invalid layout `{unknown}`: expected `edges` or `centered`"
+            )));
+        },
+    };
     let pipeline_opts = PipelineOptions {
         frame: FrameOptions {
             theme,
+            layout,
             meta_policy: if opts.show_meta {
                 MetaPolicy::Auto
             } else {
@@ -108,12 +122,14 @@ fn display_chain(err: &PipelineError) -> String {
     message
 }
 
-/// JS-facing options shape. `theme` is the kebab-case label exposed by
-/// [`FrameTheme::label`] (`"paper"` / `"ink"`); see [`parse_theme`].
+/// JS-facing options shape. `theme` / `layout` are the kebab-case
+/// labels exposed by [`FrameTheme::label`] and [`CaptionLayout::label`];
+/// see [`parse_theme`] / [`parse_layout`].
 #[derive(Debug, Deserialize)]
 struct JsOptions {
     jpeg_quality: u8,
     theme: String,
+    layout: String,
     show_meta: bool,
     max_long_edge: Option<u32>,
 }
@@ -128,9 +144,18 @@ fn parse_theme(raw: &str) -> Result<FrameTheme, &str> {
     }
 }
 
+/// Map the JS-side layout label back to the typed enum.
+fn parse_layout(raw: &str) -> Result<CaptionLayout, &str> {
+    match raw {
+        s if s == CaptionLayout::Edges.label() => Ok(CaptionLayout::Edges),
+        s if s == CaptionLayout::Centered.label() => Ok(CaptionLayout::Centered),
+        other => Err(other),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{parse_theme, FrameTheme};
+    use super::{parse_layout, parse_theme, CaptionLayout, FrameTheme};
 
     #[test]
     fn parse_theme_accepts_known_labels() {
@@ -141,5 +166,16 @@ mod tests {
     #[test]
     fn parse_theme_rejects_unknown() {
         assert_eq!(parse_theme("midnight"), Err("midnight"));
+    }
+
+    #[test]
+    fn parse_layout_accepts_known_labels() {
+        assert_eq!(parse_layout("edges").unwrap(), CaptionLayout::Edges);
+        assert_eq!(parse_layout("centered").unwrap(), CaptionLayout::Centered);
+    }
+
+    #[test]
+    fn parse_layout_rejects_unknown() {
+        assert_eq!(parse_layout("stacked"), Err("stacked"));
     }
 }
