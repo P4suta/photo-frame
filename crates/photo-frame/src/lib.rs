@@ -12,6 +12,7 @@
 //!
 //! [`Provenance`]: photo_frame_types::Provenance
 
+mod batch;
 mod options;
 mod pipeline;
 
@@ -27,5 +28,6 @@ pub use photo_frame_types::{
     Provenance, QualityPreset,
 };
 
+pub use crate::batch::{batch_one, BatchOutcome};
 pub use crate::options::PipelineOptions;
 pub use crate::pipeline::{pipeline, PipelineError};
