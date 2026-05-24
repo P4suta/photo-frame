@@ -3,6 +3,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # The Dockerfile is multi-stage (chef-base / planner / cacher /
+      # builder / runtime / dev). docker-compose builds only the `dev`
+      # stage here; the `runtime` stage (slim CLI distribution image) is
+      # built explicitly via `just docker-build-release`.
+      target: dev
       args:
         # `UID` is a readonly bash variable on the host (`UID=$(id -u) docker
         # compose build` fails with "UID: readonly variable"). Renamed to
