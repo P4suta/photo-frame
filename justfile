@@ -82,3 +82,12 @@ run *args:
 
 build-release:
     cargo build -p photo-frame-cli --release
+
+# ── Docker images ────────────────────────────────────────────────────────
+
+# Build the slim runtime image for distribution. Drives the multi-stage
+# Dockerfile's chef-base → planner → cacher → builder → runtime chain
+# via cargo-chef so an app-source change re-uses the cooked dep layer.
+docker-build-release:
+    DOCKER_BUILDKIT=1 docker build --target runtime -t photo-frame:latest .
+    docker image inspect photo-frame:latest --format 'image: {{ "{{" }}.RepoTags{{ "}}" }} size: {{ "{{" }}.Size{{ "}}" }} bytes'

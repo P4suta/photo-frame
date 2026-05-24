@@ -1,0 +1,45 @@
+# Build context exclusions. Without this file the entire repository
+# (including target/, artifacts/, .git/, dist/, node_modules/) is sent to
+# the Docker daemon every build — slow on the wire and a frequent
+# source of cargo-chef cache invalidation.
+#
+# Rule of thumb: anything under .gitignore should be here too, plus a few
+# extra dev artefacts that *aren't* gitignored but never belong in an
+# image.
+
+# Build artefacts (any cargo / Rust target dir, including the historical
+# workaround locations Phase 1.6 removed)
+target/
+.cargo-cache-docker/
+target-docker/
+
+# Front-end build outputs
+**/dist/
+**/pkg/
+**/node_modules/
+
+# IDE / OS junk
+.vscode/
+.idea/
+.DS_Store
+
+# Local git metadata — never needed in an image and changes constantly,
+# defeating layer caching of `COPY . .`.
+.git/
+.gitignore
+.gitattributes
+
+# Bench / measurement output (writes happen during dev, would otherwise
+# break cargo-chef's `cacher` layer cache because mtime changes propagate
+# through `COPY . .` in `planner` / `builder`).
+artifacts/
+
+# Lefthook + local secrets
+.lefthook-local.yml
+.env
+.env.local
+
+# Markdown-only changes don't need to invalidate the image either —
+# keep them out of the build context.
+*.md
+docs/

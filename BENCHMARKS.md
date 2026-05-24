@@ -95,23 +95,37 @@ Data-driven means we also record what *didn't* move the needle, so a
 future contributor doesn't waste effort re-investigating the same
 optimisation.
 
-### cargo-chef multi-stage Dockerfile (planned Phase 1.5) — not applicable, skipped
+### cargo-chef multi-stage Dockerfile (Phase 1.5) — adopted
 
-cargo-chef precompiles the dependency graph into a cacheable Docker
-stage so changes to the application source don't trigger a full
-dependency recompile. It's the standard pattern for **production
-runtime images** that build & ship a Rust binary.
+(Initial Phase 1.5 commit deferred this as "not applicable for the
+bind-mount dev image". User reversed: ship cargo-chef anyway so we
+also gain a slim CLI runtime image for distribution. Subsequent commit
+ships it.)
 
-For our `photo-frame-dev` image the source isn't COPYed in — it's
-bind-mounted at container start (`docker compose run -v .:/workspace`).
-The dependency cache that matters at iteration time lives in the
-`target-cache` named volume, *outside* the image. cargo-chef can't
-warm that volume because Docker initialises it lazily on first mount.
+**Multi-stage layout** (Dockerfile):
 
-Skip until/unless we ship a slim production runtime image of the CLI
-(`scratch` or `distroless` base + statically-linked photo-frame
-binary). Phase 1.4's BuildKit cache mounts already give us the
-registry/git cache without the cargo-chef ceremony.
+  chef-base   rust:slim + cargo-binstall + cargo-chef
+  planner     `cargo chef prepare` → recipe.json (workspace dep manifest)
+  cacher      `cargo chef cook --release` → dependencies compiled
+  builder     COPY workspace source → `cargo build --release -p cli`
+  runtime     debian:trixie-slim + ca-certificates + the CLI binary
+  dev         (unchanged) full tooling for `docker compose run`
+
+`docker-compose.yml` builds `target: dev` by default. The release image
+is built via `just docker-build-release` (`docker build --target runtime
+-t photo-frame:latest .`).
+
+| Scenario | Runtime image build (s) |
+| -------- | ----------------------: |
+| Cold (first ever build, all deps compiled at -O3 release) | ~480 s |
+| Warm (no source change, full cache hit) | **1.3 s** |
+| Warm (app source touched, deps cached) | _expected ~30-60 s_ |
+| Final image size | **32 MB** (debian-slim base + 14 MB CLI binary + ca-certs) |
+
+`.dockerignore` is required for the warm path — without it `COPY . .`
+in the planner / builder stages picks up writes to `target/`,
+`artifacts/`, etc. and invalidates the cargo-chef cache on every
+build.
 
 ### mold linker (planned Phase 1.1) — **0% improvement, skipped**
 
