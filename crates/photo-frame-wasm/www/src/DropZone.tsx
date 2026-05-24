@@ -1,16 +1,32 @@
 import { createSignal } from 'solid-js';
 
+export type DroppedFile = {
+  data: Uint8Array;
+  name: string;
+};
+
 type Props = {
-  onLoad: (data: Uint8Array, name: string) => void;
+  /**
+   * Called with every file the user dropped or selected. Files arrive in
+   * one batch (preserving the order the browser provided) so the parent
+   * can decide whether to handle them as a single preview or a batch.
+   */
+  onLoad: (files: DroppedFile[]) => void;
 };
 
 export const DropZone = (props: Props) => {
   const [over, setOver] = createSignal(false);
   let fileInput: HTMLInputElement | undefined;
 
-  const handleFile = async (file: File): Promise<void> => {
-    const buffer = await file.arrayBuffer();
-    props.onLoad(new Uint8Array(buffer), file.name);
+  const ingest = async (files: FileList | null): Promise<void> => {
+    if (!files || files.length === 0) return;
+    const loaded: DroppedFile[] = await Promise.all(
+      Array.from(files).map(async (file) => ({
+        data: new Uint8Array(await file.arrayBuffer()),
+        name: file.name,
+      })),
+    );
+    props.onLoad(loaded);
   };
 
   const openPicker = (): void => fileInput?.click();
@@ -21,7 +37,7 @@ export const DropZone = (props: Props) => {
       id="drop-zone"
       class="drop"
       classList={{ over: over() }}
-      aria-label="Drop an image here or press Enter to open the file picker"
+      aria-label="Drop images here or press Enter to open the file picker"
       onClick={openPicker}
       onDragOver={(event) => {
         event.preventDefault();
@@ -31,22 +47,21 @@ export const DropZone = (props: Props) => {
       onDrop={(event) => {
         event.preventDefault();
         setOver(false);
-        const file = event.dataTransfer?.files[0];
-        if (file) void handleFile(file);
+        void ingest(event.dataTransfer?.files ?? null);
       }}
     >
       <p>
-        Drop a JPEG or PNG here, or{' '}
+        Drop one or many JPEG/PNG images here, or{' '}
         <span class="link">
           browse
           <input
             ref={fileInput}
             type="file"
             accept="image/jpeg,image/png"
+            multiple
             hidden
             onChange={(event) => {
-              const file = event.currentTarget.files?.[0];
-              if (file) void handleFile(file);
+              void ingest(event.currentTarget.files);
             }}
           />
         </span>

@@ -52,6 +52,10 @@ clap               = { version = "4", features = ["derive"] }
 rayon              = "1"
 indicatif          = "0.17"
 num_cpus           = "1"
+# Drop-in `Instant` shim that works on wasm32-unknown-unknown
+# (delegates to `performance.now()` in the browser). Native targets
+# get the std-lib implementation with zero overhead.
+web-time           = "1"
 # anyhow was used by v1.x's CLI; v2.0 replaces it with miette so all
 # error variants carry their diagnostic code + help text through to the
 # user. Kept out of [workspace.dependencies] entirely — if any future

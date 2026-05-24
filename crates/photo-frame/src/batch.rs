@@ -9,7 +9,7 @@
 //! all three without dragging a heavyweight dependency into the
 //! wasm32-unknown-unknown target.
 
-use std::time::Instant;
+use web_time::Instant;
 
 use crate::options::PipelineOptions;
 use crate::pipeline::{pipeline, PipelineError};
