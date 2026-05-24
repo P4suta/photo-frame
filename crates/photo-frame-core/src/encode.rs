@@ -1,5 +1,7 @@
-//! JPEG encoding boundary. Lives in its own module so a future feature-gated
-//! encoder (mozjpeg on the CLI) can drop in without touching the pipeline.
+//! JPEG encoding boundary. Lives in its own module so a future alternative
+//! encoder (a lossy WebP variant once image-rs ships one, or a CLI-only
+//! mozjpeg-style path that opts out of the Pure-Rust contract) can drop in
+//! without touching the pipeline.
 
 use std::ops::RangeInclusive;
 

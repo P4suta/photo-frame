@@ -29,5 +29,5 @@ mod pipeline;
 mod text;
 
 pub use crate::error::{ErrorCategory, FrameError};
-pub use crate::options::{Background, FrameOptions, MetaPolicy};
+pub use crate::options::{Background, FrameOptions, MetaPolicy, QualityPreset};
 pub use crate::pipeline::frame_image;

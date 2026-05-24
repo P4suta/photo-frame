@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{bail, Context, Result};
-use clap::{ArgAction, Parser};
+use clap::{ArgAction, Parser, ValueEnum};
 use photo_frame_core::{
-    frame_image, Background, ErrorCategory, FrameError, FrameOptions, MetaPolicy,
+    frame_image, Background, ErrorCategory, FrameError, FrameOptions, MetaPolicy, QualityPreset,
 };
 use tracing::{error, info, instrument, Level};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -27,17 +27,23 @@ struct Cli {
     #[arg(short, long, value_name = "PATH")]
     output: Option<PathBuf>,
 
-    /// JPEG quality, 1..=100.
-    #[arg(short, long, default_value_t = 92, value_parser = clap::value_parser!(u8).range(1..=100))]
-    quality: u8,
+    /// Quality / size bundle. Individual --quality and --max-long-edge
+    /// flags override the preset's values.
+    #[arg(long, value_enum, default_value_t = CliPreset::Standard)]
+    preset: CliPreset,
+
+    /// Override the preset's JPEG quality (1..=100).
+    #[arg(short, long, value_parser = clap::value_parser!(u8).range(1..=100))]
+    quality: Option<u8>,
+
+    /// Override the preset's longer-edge pixel cap. Omit to inherit the
+    /// preset value (SNS = 2048, others = no cap).
+    #[arg(long, value_name = "PX")]
+    max_long_edge: Option<u32>,
 
     /// Suppress the metadata strip even if EXIF is present.
     #[arg(long)]
     no_meta: bool,
-
-    /// Downscale so the longer edge is at most this many pixels.
-    #[arg(long, value_name = "PX")]
-    max_long_edge: Option<u32>,
 
     /// Frame background color as `#RRGGBB` or `RRGGBB`.
     #[arg(short, long, value_name = "HEX", default_value = "#FFFFFF", value_parser = parse_hex_color)]
@@ -48,12 +54,33 @@ struct Cli {
     verbose: u8,
 
     /// Only emit warnings and errors.
-    #[arg(short, long, conflicts_with = "verbose")]
+    #[arg(long, conflicts_with = "verbose")]
     quiet: bool,
 
     /// Emit one JSON event per line to stderr instead of pretty text.
     #[arg(long)]
     json: bool,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+#[clap(rename_all = "lowercase")]
+enum CliPreset {
+    /// Optimised for SNS upload: small file, long edge ≤ 2048 px.
+    Sns,
+    /// Balanced default. No downscale.
+    Standard,
+    /// Highest quality, no downscale.
+    Maximum,
+}
+
+impl From<CliPreset> for QualityPreset {
+    fn from(value: CliPreset) -> Self {
+        match value {
+            CliPreset::Sns => Self::Sns,
+            CliPreset::Standard => Self::Standard,
+            CliPreset::Maximum => Self::Maximum,
+        }
+    }
 }
 
 fn main() -> ExitCode {
@@ -64,25 +91,14 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             report_error(&err);
-            // If the error chain bottoms out at a FrameError, honour its
-            // category code; otherwise generic failure.
             ExitCode::from(u8::try_from(exit_code_for(&err)).unwrap_or(1))
         },
     }
 }
 
-#[instrument(skip_all, fields(inputs = cli.inputs.len()))]
+#[instrument(skip_all, fields(inputs = cli.inputs.len(), preset = ?cli.preset))]
 fn run(cli: &Cli) -> Result<()> {
-    let opts = FrameOptions {
-        jpeg_quality: cli.quality,
-        background: cli.background,
-        meta_policy: if cli.no_meta {
-            MetaPolicy::Never
-        } else {
-            MetaPolicy::Auto
-        },
-        max_long_edge: cli.max_long_edge,
-    };
+    let opts = build_options(cli);
 
     let single = cli.inputs.len() == 1;
     for input in &cli.inputs {
@@ -93,6 +109,29 @@ fn run(cli: &Cli) -> Result<()> {
         println!("{} → {}", input.display(), output.display());
     }
     Ok(())
+}
+
+/// Materialise [`FrameOptions`] from the parsed CLI. Preset supplies the
+/// baseline; individual flags layer on top of it.
+fn build_options(cli: &Cli) -> FrameOptions {
+    let preset: QualityPreset = cli.preset.into();
+    let mut opts = FrameOptions::from_preset(preset);
+    if let Some(q) = cli.quality {
+        opts.jpeg_quality = q;
+    }
+    // `cli.max_long_edge` being `Some(_)` is the *user-explicitly-asked*
+    // signal; `None` means "inherit from preset", which we already did
+    // via `from_preset`. So only overwrite when the user provided one.
+    if cli.max_long_edge.is_some() {
+        opts.max_long_edge = cli.max_long_edge;
+    }
+    opts.background = cli.background;
+    opts.meta_policy = if cli.no_meta {
+        MetaPolicy::Never
+    } else {
+        MetaPolicy::Auto
+    };
+    opts
 }
 
 #[instrument(skip(opts))]
@@ -194,8 +233,9 @@ fn parse_hex_color(s: &str) -> Result<Background> {
 
 #[cfg(test)]
 mod tests {
-    use super::{exit_code_for, parse_hex_color};
-    use photo_frame_core::{Background, FrameError};
+    use super::{build_options, exit_code_for, parse_hex_color, Cli, CliPreset};
+    use clap::Parser;
+    use photo_frame_core::{Background, FrameError, QualityPreset};
 
     #[test]
     fn parses_hex_with_hash() {
@@ -231,5 +271,71 @@ mod tests {
     fn exit_code_defaults_to_one_for_unknown_error() {
         let err = anyhow::anyhow!("totally unrelated");
         assert_eq!(exit_code_for(&err), 1);
+    }
+
+    #[test]
+    fn cli_preset_maps_to_core_preset() {
+        assert!(matches!(
+            QualityPreset::from(CliPreset::Sns),
+            QualityPreset::Sns
+        ));
+        assert!(matches!(
+            QualityPreset::from(CliPreset::Standard),
+            QualityPreset::Standard
+        ));
+        assert!(matches!(
+            QualityPreset::from(CliPreset::Maximum),
+            QualityPreset::Maximum
+        ));
+    }
+
+    #[test]
+    fn default_preset_drives_standard_options() {
+        let cli = Cli::try_parse_from(["photo-frame", "photo.jpg"]).unwrap();
+        let opts = build_options(&cli);
+        assert_eq!(opts.jpeg_quality, 92);
+        assert_eq!(opts.max_long_edge, None);
+    }
+
+    #[test]
+    fn sns_preset_caps_long_edge() {
+        let cli = Cli::try_parse_from(["photo-frame", "--preset", "sns", "photo.jpg"]).unwrap();
+        let opts = build_options(&cli);
+        assert_eq!(opts.jpeg_quality, 78);
+        assert_eq!(opts.max_long_edge, Some(2048));
+    }
+
+    #[test]
+    fn maximum_preset_bumps_quality() {
+        let cli = Cli::try_parse_from(["photo-frame", "--preset", "maximum", "photo.jpg"]).unwrap();
+        let opts = build_options(&cli);
+        assert_eq!(opts.jpeg_quality, 98);
+        assert_eq!(opts.max_long_edge, None);
+    }
+
+    #[test]
+    fn explicit_quality_overrides_preset() {
+        let cli = Cli::try_parse_from(["photo-frame", "--preset", "sns", "-q", "95", "photo.jpg"])
+            .unwrap();
+        let opts = build_options(&cli);
+        assert_eq!(opts.jpeg_quality, 95);
+        // Preset's long-edge cap survives — only the quality was overridden.
+        assert_eq!(opts.max_long_edge, Some(2048));
+    }
+
+    #[test]
+    fn explicit_max_long_edge_overrides_preset() {
+        let cli = Cli::try_parse_from([
+            "photo-frame",
+            "--preset",
+            "maximum",
+            "--max-long-edge",
+            "3000",
+            "photo.jpg",
+        ])
+        .unwrap();
+        let opts = build_options(&cli);
+        assert_eq!(opts.max_long_edge, Some(3000));
+        assert_eq!(opts.jpeg_quality, 98);
     }
 }
