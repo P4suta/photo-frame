@@ -1,0 +1,27 @@
+[package]
+name        = "photo-frame-core"
+description = "Liit-style golden-ratio photo framing with embedded EXIF metadata."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+readme      = "../../README.md"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+image        = { workspace = true }
+kamadak-exif = { workspace = true }
+ab_glyph     = { workspace = true }
+imageproc    = { workspace = true }
+thiserror    = { workspace = true }
+tracing      = { workspace = true }
+
+[dev-dependencies]
+tracing-test = { version = "0.2", default-features = false }
+
+[lints]
+workspace = true

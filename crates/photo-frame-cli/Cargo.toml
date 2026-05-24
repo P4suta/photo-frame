@@ -1,0 +1,23 @@
+[package]
+name        = "photo-frame-cli"
+description = "Command-line interface for photo-frame."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+
+[[bin]]
+name = "photo-frame"
+path = "src/main.rs"
+
+[dependencies]
+photo-frame-core   = { path = "../photo-frame-core" }
+clap               = { workspace = true }
+anyhow             = { workspace = true }
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[lints]
+workspace = true

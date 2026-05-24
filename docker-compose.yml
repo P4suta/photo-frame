@@ -1,0 +1,28 @@
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        USER_UID: ${UID:-1000}
+        USER_GID: ${GID:-1000}
+    image: photo-frame-dev:latest
+    container_name: photo-frame-dev
+    volumes:
+      - .:/workspace:cached
+      - cargo-registry:/home/dev/.cargo/registry
+      - cargo-git:/home/dev/.cargo/git
+      - target-cache:/workspace/target
+      - node-cache:/workspace/crates/photo-frame-wasm/www/node_modules
+    working_dir: /workspace
+    ports:
+      - '5173:5173' # Vite dev server
+    tty: true
+    stdin_open: true
+    command: bash
+
+volumes:
+  cargo-registry:
+  cargo-git:
+  target-cache:
+  node-cache:

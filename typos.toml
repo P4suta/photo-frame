@@ -1,0 +1,24 @@
+[files]
+extend-exclude = [
+    "target",
+    "node_modules",
+    "**/pkg",
+    "**/dist",
+    "*.otf",
+    "*.ttf",
+    "*.jpg",
+    "*.jpeg",
+    "*.png",
+    "*.webp",
+    "*.lock",
+]
+
+[default]
+extend-ignore-re = [
+    # Hex color literals
+    "#[0-9a-fA-F]{3,8}\\b",
+]
+
+[default.extend-words]
+# Project-specific allow-list:
+# (empty for now — add false positives as they arise)

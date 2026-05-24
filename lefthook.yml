@@ -1,0 +1,32 @@
+# Lefthook hooks delegate to `just` recipes so there is exactly one source of truth
+# for what "fmt / lint / test" means across local, hook, and CI surfaces.
+
+pre-commit:
+  parallel: true
+  commands:
+    fmt-rust:
+      glob: '*.rs'
+      run: cargo fmt --all -- --check
+    fmt-ts:
+      glob: '*.{ts,tsx,js,jsx,json,jsonc}'
+      run: biome format {staged_files}
+    fmt-toml:
+      glob: '*.toml'
+      run: taplo fmt --check {staged_files}
+    typos:
+      run: typos --no-progress
+    lint-ts:
+      glob: '*.{ts,tsx,js,jsx}'
+      run: biome lint {staged_files}
+
+pre-push:
+  parallel: true
+  commands:
+    clippy:
+      run: just lint-rust
+    deps:
+      run: just lint-deps
+    test:
+      run: just test
+    wasm-build:
+      run: just wasm-build
