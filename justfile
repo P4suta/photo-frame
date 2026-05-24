@@ -61,17 +61,25 @@ test:
 wasm-build:
     cd crates/photo-frame-wasm && wasm-pack build --target web --release --out-dir www/pkg
 
+# Mirror the Geist font files from the frame crate into the web bundle's
+# public/ directory so Vite serves them at /fonts/Geist/. Canonical source
+# of truth stays in `photo-frame-frame/assets/fonts/Geist/`; this is just
+# a build-output copy (ignored by git, regenerated on every build).
+copy-web-fonts:
+    mkdir -p crates/photo-frame-wasm/www/public/fonts/Geist
+    cp -p crates/photo-frame-frame/assets/fonts/Geist/. crates/photo-frame-wasm/www/public/fonts/Geist/ -r
+
 # Build the Vite/SolidJS web bundle on top of the WASM artefact. Mirrors what
 # `.github/workflows/pages.yml` runs on push to main, so `just ci` catches
 # TypeScript or Vite regressions locally instead of letting Pages discover
 # them after the merge.
-web-build: wasm-build
+web-build: wasm-build copy-web-fonts
     cd crates/photo-frame-wasm/www && bun install --frozen-lockfile && bun run build
 
-wasm-dev: wasm-build
+wasm-dev: wasm-build copy-web-fonts
     cd crates/photo-frame-wasm/www && bun install && bun run dev -- --host 0.0.0.0
 
-wasm-preview: wasm-build
+wasm-preview: wasm-build copy-web-fonts
     cd crates/photo-frame-wasm/www && bun install && bun run build && bun run preview -- --host 0.0.0.0
 
 # ── CLI ──────────────────────────────────────────────────────────────────────

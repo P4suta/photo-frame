@@ -11,6 +11,11 @@ node_modules
 **/node_modules
 **/pkg
 **/dist
+# Fonts mirrored from photo-frame-frame/assets/ into the web public/
+# tree by `just copy-web-fonts`. Single source of truth stays in the
+# frame crate; this directory is a build-time copy so Vite serves them
+# from the bundle root.
+crates/photo-frame-wasm/www/public/fonts/
 .vite
 .cache
 coverage
