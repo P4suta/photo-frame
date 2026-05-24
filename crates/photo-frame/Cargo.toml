@@ -24,5 +24,10 @@ photo-frame-encode = { workspace = true }
 thiserror          = { workspace = true }
 tracing            = { workspace = true }
 
+[dev-dependencies]
+# Used by integration-style tests to synthesise small JPEGs in-process
+# rather than committing binary fixtures.
+image = { workspace = true }
+
 [lints]
 workspace = true
