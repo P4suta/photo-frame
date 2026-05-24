@@ -28,6 +28,17 @@ deny = [
     { name = "autotools"   },
     { name = "meson"       },
 ]
+# Note on the opt-in `heif` cargo feature: enabling it on
+# `photo-frame-decode` pulls in `libheif-rs` → `libheif-sys`, which in
+# turn drags `pkg-config` / `vcpkg` into the build graph. That breaks
+# the C-purity contract — *intentionally*. The trade is explicit at the
+# feature flag.
+#
+# cargo-deny's `skip-tree` is `multiple-versions`-only, so it cannot
+# bypass `deny` on a per-subtree basis. We therefore do **not** run
+# `cargo deny check bans --all-features`; the contract applies only to
+# the default-features build (`just lint-deps`). A heif-aware lint job
+# would have to override the `deny` list, not whitelist a subtree.
 
 [licenses]
 # We're not enforcing a license allowlist here; the v1 dep tree is hand-audited
