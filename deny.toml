@@ -57,11 +57,11 @@ allow = [
     "Unicode-DFS-2016",
     "CC0-1.0",
     "0BSD",
-    "OFL-1.1",     # Geist Sans bundled with photo-frame-frame
-    "MPL-2.0",     # weak-copyleft (file-level), considered compatible
+    "OFL-1.1",                        # Geist Sans bundled with photo-frame-frame
+    "MPL-2.0",                        # weak-copyleft (file-level), considered compatible
 ]
 unused-allowed-license = "allow"
-confidence-threshold   = 0.93
+confidence-threshold = 0.93
 
 [advisories]
 # Advisories are a separate concern from C-purity; we let `cargo deny check
