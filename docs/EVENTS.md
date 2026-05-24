@@ -44,8 +44,11 @@ whose fields are filled in over the span's lifetime via
 | `frame_render`  | frame    | `photo_width`, `photo_height`, `canvas_width`, `canvas_height`, `caption_visible` |
 | `encode_jpeg`   | encode   | `width`, `height`, `quality`, `output_bytes`                                    |
 | `pipeline`      | facade   | `input_bytes`, `output_bytes`                                                    |
+| `batch_one`     | facade   | `input_bytes`, `elapsed_ms`                                                      |
+| `run`           | cli      | `inputs`, `preset`, `jobs`, `strict`                                              |
 | `process_one`   | cli      | `inputs`, `input`, `output`                                                      |
 | `wasm_frame`    | wasm     | `input_bytes`, `output_bytes`                                                    |
+| `wasm_frame_batch` | wasm  | `total`, `succeeded`, `failed`                                                   |
 
 ## Event catalogue
 
@@ -65,7 +68,13 @@ whose fields are filled in over the span's lifetime via
 | `decode.exif.datetime.exhausted`      | debug | decode | `candidates`                 | All three datetime candidate tags (Original/Digitized/DateTime) missing or unparsable |
 | `decode.heif.stride_padding`          | debug | decode (feature=heif) | `stride`, `packed_row` | libheif plane has alignment padding; row-by-row repack happens |
 | `decode.heif.truncated`               | warn  | decode (feature=heif) | `expected_rows`, `got_rows` | libheif plane data shorter than declared stride*height |
-| `wasm.frame.options_invalid`          | error | wasm   | `error`                      | serde-wasm-bindgen failed to deserialise the JS-side options object |
+| `wasm.options_invalid`                | error | wasm   | `error`                      | serde-wasm-bindgen failed to deserialise the JS-side options object |
+| `wasm.theme_invalid`                  | error | wasm   | `theme`                      | JS-side theme string didn't match `paper` or `ink` |
+| `wasm.layout_invalid`                 | error | wasm   | `layout`                     | JS-side layout string didn't match `edges` or `centered` |
+| `wasm.frame_batch.done`               | info  | wasm   | `total`, `succeeded`, `failed` | Batch finished (one event per `frame_batch` call) |
+| `cli.batch.started`                   | info  | cli    | `inputs`, `jobs`, `strict`   | Batch run kicked off |
+| `cli.batch.item_done`                 | info  | cli    | `input`, `output`, `elapsed_ms` | A single input finished framing and was written to disk |
+| `cli.batch.summary`                   | info  | cli    | `processed`, `ok`, `failed`, `total_ms`, `avg_ms`, `speedup`, `jobs` | Continue-on-failure run summary (mirrors the stderr text) |
 | (anonymous error in lib.rs)           | error | wasm   | `chain`                      | Pipeline failed; the full source chain rendered as one string before JsError construction |
 
 Anonymous events (no `target:` override) inherit the file path as

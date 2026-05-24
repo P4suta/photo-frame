@@ -79,13 +79,45 @@ echo $?   # 2  (Category::Input)
 
 Exit code map (stable contract):
 
-| Category | Exit code | Examples                                |
-| -------- | --------- | --------------------------------------- |
-| Input    | 2         | empty input, unknown format, bad CLI arg |
-| Decode   | 3         | corrupt JPEG, HEIF decode failure        |
-| Render   | 4         | (reserved)                              |
-| Encode   | 5         | JPEG encoder failure                    |
-| Internal | 1         | producer-side invariant breach          |
+| Category        | Exit code | Examples                                                          |
+| --------------- | --------- | ----------------------------------------------------------------- |
+| Input           | 2         | empty input, unknown format, bad CLI arg                          |
+| Decode          | 3         | corrupt JPEG, HEIF decode failure                                 |
+| Render          | 4         | (reserved)                                                        |
+| Encode          | 5         | JPEG encoder failure                                              |
+| PartialFailure  | 6         | batch run finished with ≥1 failure under default continue-on-fail |
+| Internal        | 1         | producer-side invariant breach                                    |
+
+## Batch processing
+
+```bash
+# Process a folder in parallel; failures don't stop the run.
+photo-frame photos/*.jpg -o out/ --jobs 8
+#   …progress bar…
+#   batch summary
+#     processed: 998 / 1000  (99.8%)
+#     failures:  2
+#       photos/bad_a.jpg → input  (0.0s)
+#       photos/bad_b.jpg → decode (0.1s)
+#     total:     23.4s  (avg 23ms / file, 14.8x speedup over single-thread, 8 jobs)
+echo $?   # 6 (PartialFailure) — some outputs missing
+
+# Stop at first failure; exit code reflects the failing input's category.
+photo-frame photos/*.jpg -o out/ --strict
+```
+
+For the browser, drop multiple files on the drop zone; the UI
+switches to a batch view and runs the Worker-hosted `frame_batch`
+off the main thread. Manual verification:
+
+```bash
+just wasm-dev
+# In the browser: drop 5+ JPEGs on the drop zone.
+# Expected: each row reports `processing` → `done`; per-row "Download"
+# saves the framed JPEG.
+# DevTools → Performance: the Main thread stays mostly idle while
+# the WASM Worker drives encoding.
+```
 
 ## Release image
 
