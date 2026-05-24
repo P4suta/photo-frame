@@ -34,7 +34,7 @@ tracing-test = { version = "0.2", default-features = false }
 # proptest drives the random-input fuzz tests under `tests/proptest_*.rs`.
 # Aim: every public decode entry point returns `Ok(Photograph)` or a
 # typed `DecodeError`, never panics, for any byte slice or EXIF blob.
-proptest     = "1"
+proptest = "1"
 
 [lints]
 workspace = true

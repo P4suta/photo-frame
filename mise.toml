@@ -19,5 +19,5 @@
 # `mise install` and get the same versions. The Dockerfile remains
 # the source of truth for what's *in the container*; mise keeps host
 # parity reproducible.
-hyperfine     = "latest"
-jq            = "latest"
+hyperfine = "latest"
+jq        = "latest"

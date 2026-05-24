@@ -12,9 +12,9 @@ publish                = false
 [lib]
 path = "src/lib.rs"
 # A bench-only crate: no tests, no doc.
-test = false
+test  = false
 bench = true
-doc = false
+doc   = false
 
 [dev-dependencies]
 photo-frame        = { workspace = true }

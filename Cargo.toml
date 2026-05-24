@@ -42,10 +42,10 @@ thiserror = "1"
 # styled, source-labelled report. `fancy` enables Unicode + ANSI
 # rendering; the CLI gates it via its own feature so non-fancy outputs
 # (JSON logs, CI runners) keep working.
-miette = "7"
-tracing = { version = "0.1", default-features = false, features = ["std", "attributes"] }
+miette             = "7"
+tracing            = { version = "0.1", default-features = false, features = ["std", "attributes"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "registry"] }
-clap = { version = "4", features = ["derive"] }
+clap               = { version = "4", features = ["derive"] }
 # anyhow was used by v1.x's CLI; v2.0 replaces it with miette so all
 # error variants carry their diagnostic code + help text through to the
 # user. Kept out of [workspace.dependencies] entirely — if any future

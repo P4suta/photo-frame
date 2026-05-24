@@ -1,11 +1,5 @@
 include = ["**/*.toml"]
-exclude = [
-    "target/**",
-    "node_modules/**",
-    "**/pkg/**",
-    "**/dist/**",
-    "artifacts/**",
-]
+exclude = ["target/**", "node_modules/**", "**/pkg/**", "**/dist/**", "artifacts/**"]
 
 [formatting]
 align_entries         = true
