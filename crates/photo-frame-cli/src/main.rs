@@ -11,7 +11,7 @@ use std::process::ExitCode;
 
 use clap::{ArgAction, Parser, ValueEnum};
 use miette::{Diagnostic, Result, WrapErr};
-use photo_frame::frame::{FrameTheme, MetaPolicy};
+use photo_frame::frame::{CaptionLayout, FrameTheme, MetaPolicy};
 use photo_frame::{pipeline, Categorize, Category, PipelineError, PipelineOptions, QualityPreset};
 use thiserror::Error;
 use tracing::{error, info, instrument, Level};
@@ -55,6 +55,12 @@ struct Cli {
     /// `ink` = soft-black frame + soft-white text.
     #[arg(long, value_enum, default_value_t = CliTheme::Paper)]
     theme: CliTheme,
+
+    /// Caption layout. `edges` keeps the four-corner liit-style layout;
+    /// `centered` joins each row with a `·` separator and centres it
+    /// under the photo.
+    #[arg(long, value_enum, default_value_t = CliLayout::Edges)]
+    layout: CliLayout,
 
     /// Increase log verbosity (`-v`=debug, `-vv`=trace).
     #[arg(short, long, action = ArgAction::Count, conflicts_with = "quiet")]
@@ -116,6 +122,22 @@ impl From<CliTheme> for FrameTheme {
         match value {
             CliTheme::Paper => Self::Paper,
             CliTheme::Ink => Self::Ink,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+#[clap(rename_all = "lowercase")]
+enum CliLayout {
+    Edges,
+    Centered,
+}
+
+impl From<CliLayout> for CaptionLayout {
+    fn from(value: CliLayout) -> Self {
+        match value {
+            CliLayout::Edges => Self::Edges,
+            CliLayout::Centered => Self::Centered,
         }
     }
 }
@@ -244,6 +266,7 @@ fn build_options(cli: &Cli) -> PipelineOptions {
         opts.frame.max_long_edge = cli.max_long_edge;
     }
     opts.frame.theme = cli.theme.into();
+    opts.frame.layout = cli.layout.into();
     opts.frame.meta_policy = if cli.no_meta {
         MetaPolicy::Never
     } else {
@@ -395,7 +418,7 @@ fn is_existing_dir(path: &Path) -> bool {
 mod tests {
     use super::{build_options, exit_code_for, Cli, CliPreset};
     use clap::Parser;
-    use photo_frame::frame::FrameTheme;
+    use photo_frame::frame::{CaptionLayout, FrameTheme};
     use photo_frame::{DecodeError, PipelineError, QualityPreset};
 
     #[test]
@@ -411,6 +434,21 @@ mod tests {
             Cli::try_parse_from(["photo-frame", "--theme", "ink", "photo.jpg"]).unwrap();
         let opts = build_options(&cli);
         assert_eq!(opts.frame.theme, FrameTheme::Ink);
+    }
+
+    #[test]
+    fn layout_defaults_to_edges() {
+        let cli = Cli::try_parse_from(["photo-frame", "photo.jpg"]).unwrap();
+        let opts = build_options(&cli);
+        assert_eq!(opts.frame.layout, CaptionLayout::Edges);
+    }
+
+    #[test]
+    fn layout_centered_flag_flips_preset() {
+        let cli = Cli::try_parse_from(["photo-frame", "--layout", "centered", "photo.jpg"])
+            .unwrap();
+        let opts = build_options(&cli);
+        assert_eq!(opts.frame.layout, CaptionLayout::Centered);
     }
 
     #[test]

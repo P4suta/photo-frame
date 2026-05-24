@@ -1,6 +1,11 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup } from 'solid-js';
 import { DropZone } from './DropZone';
-import { type FrameOptions, type FrameTheme, frameImage } from './frame-client';
+import {
+  type CaptionLayout,
+  type FrameOptions,
+  type FrameTheme,
+  frameImage,
+} from './frame-client';
 
 const PREVIEW_LONG_EDGE = 1600;
 
@@ -14,6 +19,11 @@ const THEMES = [
   { value: 'paper' as const, label: 'Paper', description: 'White frame, dark text' },
   { value: 'ink' as const, label: 'Ink', description: 'Soft-black frame, light text' },
 ] satisfies ReadonlyArray<{ value: FrameTheme; label: string; description: string }>;
+
+const LAYOUTS = [
+  { value: 'edges' as const, label: 'Edges', description: 'Four-corner liit-style layout' },
+  { value: 'centered' as const, label: 'Centered', description: 'Both rows centred under the photo' },
+] satisfies ReadonlyArray<{ value: CaptionLayout; label: string; description: string }>;
 
 /**
  * Mirror of `photo_frame_core::QualityPreset` — keep in sync with
@@ -42,6 +52,7 @@ export const App = () => {
   const [resize, setResize] = createSignal(false);
   const [resizePx, setResizePx] = createSignal<number>(2048);
   const [theme, setTheme] = createSignal<FrameTheme>('paper');
+  const [layout, setLayout] = createSignal<CaptionLayout>('edges');
   const [showMeta, setShowMeta] = createSignal(true);
   const [status, setStatus] = createSignal('');
   const [busy, setBusy] = createSignal(false);
@@ -65,6 +76,7 @@ export const App = () => {
   const buildOptions = (maxLongEdge: number | null): FrameOptions => ({
     jpeg_quality: quality(),
     theme: theme(),
+    layout: layout(),
     show_meta: showMeta(),
     max_long_edge: maxLongEdge,
   });
@@ -206,6 +218,29 @@ export const App = () => {
                           onClick={() => setTheme(t.value)}
                         >
                           {t.label}
+                        </button>
+                      </>
+                    )}
+                  </For>
+                </div>
+              </div>
+
+              <div class="control-row">
+                <span class="control-label">Layout</span>
+                <div class="segmented" role="radiogroup" aria-label="Caption layout">
+                  <For each={LAYOUTS}>
+                    {(l) => (
+                      <>
+                        {/* biome-ignore lint/a11y/useSemanticElements: matches the Theme segmented control above. */}
+                        <button
+                          type="button"
+                          role="radio"
+                          aria-checked={layout() === l.value}
+                          title={l.description}
+                          classList={{ active: layout() === l.value }}
+                          onClick={() => setLayout(l.value)}
+                        >
+                          {l.label}
                         </button>
                       </>
                     )}

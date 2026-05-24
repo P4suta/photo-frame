@@ -7,7 +7,7 @@ use photo_frame_types::{Photograph, Pixels};
 use crate::format::{caption_from, Caption};
 use crate::geometry::{self, Layout, MetaLayout};
 use crate::num::round_to_u32;
-use crate::options::{FrameOptions, MetaPolicy};
+use crate::options::{CaptionLayout, FrameOptions, MetaPolicy};
 use crate::text::{Renderer, Weight};
 
 #[tracing::instrument(
@@ -18,6 +18,7 @@ use crate::text::{Renderer, Weight};
         photo_width = photo.pixels.width(),
         photo_height = photo.pixels.height(),
         theme = opts.theme.label(),
+        layout = opts.layout.label(),
         meta_policy = ?opts.meta_policy,
         max_long_edge = ?opts.max_long_edge,
         canvas_width = tracing::field::Empty,
@@ -97,13 +98,16 @@ fn compose_canvas(
 
     if let Some(ml) = layout.meta.as_ref() {
         let renderer = Renderer::new(opts.theme.ink());
-        draw_caption(&mut canvas, &renderer, ml, caption, canvas_w);
+        match opts.layout {
+            CaptionLayout::Edges => draw_caption_edges(&mut canvas, &renderer, ml, caption, canvas_w),
+            CaptionLayout::Centered => draw_caption_centered(&mut canvas, &renderer, ml, caption, canvas_w),
+        }
     }
 
     canvas
 }
 
-fn draw_caption(
+fn draw_caption_edges(
     canvas: &mut RgbaImage,
     renderer: &Renderer,
     ml: &MetaLayout,
@@ -150,6 +154,36 @@ fn draw_caption(
             ml.font_height,
             Weight::Regular,
             text,
+        );
+    }
+}
+
+fn draw_caption_centered(
+    canvas: &mut RgbaImage,
+    renderer: &Renderer,
+    ml: &MetaLayout,
+    caption: &Caption,
+    canvas_w: u32,
+) {
+    let cx = canvas_w / 2;
+    if let Some(text) = caption.top_combined() {
+        renderer.draw_center(
+            canvas,
+            cx,
+            ml.top_line_y,
+            ml.font_height,
+            Weight::Medium,
+            &text,
+        );
+    }
+    if let Some(text) = caption.bottom_combined() {
+        renderer.draw_center(
+            canvas,
+            cx,
+            ml.bottom_line_y,
+            ml.font_height,
+            Weight::Regular,
+            &text,
         );
     }
 }

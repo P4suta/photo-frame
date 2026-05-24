@@ -31,6 +31,30 @@ impl Caption {
             && self.bottom_left.is_none()
             && self.bottom_right.is_none()
     }
+
+    /// Top row collapsed into a single string for centred layouts —
+    /// `"<camera> · <lens>"`, omitting either side when absent.
+    pub(crate) fn top_combined(&self) -> Option<String> {
+        join_with_separator(self.top_left.as_deref(), self.top_right.as_deref())
+    }
+
+    /// Bottom row collapsed for centred layouts — `"<exposure> · <date>"`.
+    pub(crate) fn bottom_combined(&self) -> Option<String> {
+        join_with_separator(self.bottom_left.as_deref(), self.bottom_right.as_deref())
+    }
+}
+
+/// Join two optional facets with the canonical `"  ·  "` separator
+/// (same one used inside the exposure line, so the centre layout
+/// reads as visually congruent with the edge layout). When only one
+/// side is present, returns it verbatim — never adds a dangling
+/// separator.
+fn join_with_separator(left: Option<&str>, right: Option<&str>) -> Option<String> {
+    match (left, right) {
+        (Some(l), Some(r)) => Some(format!("{l}  ·  {r}")),
+        (Some(s), None) | (None, Some(s)) => Some(s.to_owned()),
+        (None, None) => None,
+    }
 }
 
 pub(crate) fn caption_from(provenance: &Provenance) -> Caption {
@@ -266,6 +290,38 @@ mod tests {
     fn caption_from_empty_provenance_is_empty() {
         let c = caption_from(&Provenance::default());
         assert!(c.is_empty());
+    }
+
+    #[test]
+    fn caption_top_combined_joins_camera_and_lens() {
+        let c = caption_from(&Provenance {
+            camera: Some(Camera {
+                make: None,
+                model: Some("NIKON Z 5".into()),
+            }),
+            lens: Some(Lens {
+                make: None,
+                model: Some("NIKKOR Z 50mm f/1.8 S".into()),
+            }),
+            ..Default::default()
+        });
+        assert_eq!(
+            c.top_combined().as_deref(),
+            Some("NIKON Z 5  ·  NIKKOR Z 50mm f/1.8 S"),
+        );
+    }
+
+    #[test]
+    fn caption_combined_drops_missing_side_without_separator() {
+        let c = caption_from(&Provenance {
+            camera: Some(Camera {
+                make: None,
+                model: Some("NIKON Z 5".into()),
+            }),
+            ..Default::default()
+        });
+        assert_eq!(c.top_combined().as_deref(), Some("NIKON Z 5"));
+        assert!(c.bottom_combined().is_none());
     }
 
     #[test]
