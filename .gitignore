@@ -31,6 +31,12 @@ coverage
 # Lefthook artifacts
 .lefthook-local.yml
 
+# Ad-hoc docker-side cargo caches used during local heif verification.
+# Inside the dev container these live under /workspace, so they show up
+# in the host bind mount but are not source.
+/.cargo-cache-docker/
+/target-docker/
+
 # Contributors are free to drop sample photos into examples/ for local
 # experimentation, but we don't track any image binaries in the repo —
 # they tend to be large, personal, and never the right shape for what
