@@ -46,6 +46,12 @@ miette             = "7"
 tracing            = { version = "0.1", default-features = false, features = ["std", "attributes"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "registry"] }
 clap               = { version = "4", features = ["derive"] }
+# Batch parallelism + progress reporting for the CLI front-end. WASM
+# never pulls these — the Web Worker does its own off-main-thread
+# strategy that does not require a runtime in the wasm binary.
+rayon              = "1"
+indicatif          = "0.17"
+num_cpus           = "1"
 # anyhow was used by v1.x's CLI; v2.0 replaces it with miette so all
 # error variants carry their diagnostic code + help text through to the
 # user. Kept out of [workspace.dependencies] entirely — if any future
