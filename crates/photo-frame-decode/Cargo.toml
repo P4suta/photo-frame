@@ -26,5 +26,10 @@ thiserror         = { workspace = true }
 tracing           = { workspace = true }
 libheif-rs        = { version = "1", optional = true }
 
+[dev-dependencies]
+# Captures `tracing` events during tests so we can pin warn/debug messages
+# as part of the observability contract.
+tracing-test = { version = "0.2", default-features = false }
+
 [lints]
 workspace = true
