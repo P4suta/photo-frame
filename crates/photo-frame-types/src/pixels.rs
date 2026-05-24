@@ -1,9 +1,26 @@
+use miette::Diagnostic;
 use thiserror::Error;
 
+use crate::{Categorize, Category};
+
 /// Constructor-time invariants for [`Pixels`].
-#[derive(Debug, Error)]
+///
+/// Both variants are caller-side programming errors (the producer
+/// handed us an inconsistent buffer / dimension pair). They surface as
+/// `Category::Internal` so the CLI exits with code 1 by convention —
+/// the user can't directly fix a producer bug, but the diagnostic
+/// `code` and `help` make it actionable for the developer.
+#[derive(Debug, Error, Diagnostic)]
 pub enum PixelError {
     #[error("pixel buffer length {got} does not match {width}x{height}x4 = {expected}")]
+    #[diagnostic(
+        code(photo_frame::types::pixels::size_mismatch),
+        help(
+            "The decoder must hand back exactly width*height*4 bytes of RGBA8 data. \
+             Verify the producer (decode crate, custom Pixels::from_rgba8 call) \
+             is computing buffer length consistently with the declared dimensions."
+        )
+    )]
     DataSizeMismatch {
         width: u32,
         height: u32,
@@ -12,7 +29,23 @@ pub enum PixelError {
     },
 
     #[error("dimensions must be non-zero (got {width}x{height})")]
+    #[diagnostic(
+        code(photo_frame::types::pixels::zero_dimension),
+        help(
+            "Pixels with zero width or height are meaningless. \
+             A 0×0 buffer usually indicates a decode bug or an upstream \
+             validation slip — check the producer."
+        )
+    )]
     ZeroDimension { width: u32, height: u32 },
+}
+
+impl Categorize for PixelError {
+    fn category(&self) -> Category {
+        // PixelError always represents a producer-side invariant
+        // violation — neither variant is the user's fault.
+        Category::Internal
+    }
 }
 
 /// Owned RGBA8 pixel grid, row-major.

@@ -23,7 +23,8 @@ pub use photo_frame_types as types;
 pub use photo_frame_decode::DecodeError;
 pub use photo_frame_encode::EncodeError;
 pub use photo_frame_types::{
-    Camera, DateTime, Exposure, Lens, Photograph, PixelError, Pixels, Provenance, QualityPreset,
+    Camera, Categorize, Category, DateTime, Exposure, Lens, Photograph, PixelError, Pixels,
+    Provenance, QualityPreset,
 };
 
 pub use crate::options::PipelineOptions;

@@ -13,11 +13,13 @@
 //! (`"105 mm"` vs `"105mm"` vs `"105"`) belongs to the renderer, not to
 //! the data carrier.
 
+mod category;
 mod photograph;
 mod pixels;
 mod preset;
 mod provenance;
 
+pub use crate::category::{Categorize, Category};
 pub use crate::photograph::Photograph;
 pub use crate::pixels::{PixelError, Pixels};
 pub use crate::preset::QualityPreset;

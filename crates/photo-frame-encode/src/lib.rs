@@ -10,7 +10,8 @@
 use std::ops::RangeInclusive;
 
 use image::{codecs::jpeg::JpegEncoder, ExtendedColorType, ImageEncoder};
-use photo_frame_types::Pixels;
+use miette::Diagnostic;
+use photo_frame_types::{Categorize, Category, Pixels};
 use thiserror::Error;
 
 const VALID_QUALITY: RangeInclusive<u8> = 1..=100;
@@ -36,13 +37,34 @@ impl Default for JpegOptions {
 }
 
 /// Why encoding failed.
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Diagnostic)]
 pub enum EncodeError {
     #[error("JPEG quality {got} out of range; expected {}..={}", VALID_QUALITY.start(), VALID_QUALITY.end())]
+    #[diagnostic(
+        code(photo_frame::encode::invalid_quality),
+        help("JPEG quality must be 1..=100. Try a value like 78 (SNS), 92 (standard), 98 (max).")
+    )]
     InvalidQuality { got: u8 },
 
     #[error("JPEG encoder failed")]
+    #[diagnostic(
+        code(photo_frame::encode::encoder_error),
+        help(
+            "The image crate's JPEG encoder reported an error. Typical \
+             causes: out-of-memory on very large canvases, or a malformed \
+             pixel buffer. The wrapped error has the format-specific reason."
+        )
+    )]
     Encode(#[source] image::ImageError),
+}
+
+impl Categorize for EncodeError {
+    fn category(&self) -> Category {
+        match self {
+            Self::InvalidQuality { .. } => Category::Input,
+            Self::Encode(_) => Category::Encode,
+        }
+    }
 }
 
 /// Encode `pixels` to JPEG bytes.

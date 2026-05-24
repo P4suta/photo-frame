@@ -19,9 +19,15 @@ heif    = ["photo-frame/heif"]
 [dependencies]
 photo-frame        = { workspace = true }
 clap               = { workspace = true }
-anyhow             = { workspace = true }
+thiserror          = { workspace = true }
+# miette + fancy: rich CLI diagnostic renderer (Unicode boxes, ANSI,
+# source labels, severity colour). Replaces the previous anyhow chain
+# walker so every error variant in the workspace surfaces with its
+# diagnostic `code` + `help` automatically.
+miette             = { workspace = true, features = ["fancy"] }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
+
 
 [lints]
 workspace = true

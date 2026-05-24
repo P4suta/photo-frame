@@ -22,6 +22,7 @@ photo-frame-decode = { workspace = true }
 photo-frame-frame  = { workspace = true }
 photo-frame-encode = { workspace = true }
 thiserror          = { workspace = true }
+miette             = { workspace = true }
 tracing            = { workspace = true }
 
 [dev-dependencies]

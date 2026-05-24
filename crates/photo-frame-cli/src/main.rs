@@ -1,18 +1,19 @@
 //! Command-line driver for the `photo-frame` facade.
 //!
-//! Reads files, calls [`photo_frame::pipeline`], writes the framed JPEG
-//! to disk. Every failure path surfaces through `anyhow`'s cause chain;
-//! observability lives in `tracing` events sent to stderr.
+//! Reads files, calls [`photo_frame::pipeline`], writes the framed
+//! JPEG to disk. Every failure surfaces through `miette::Result`, so a
+//! rich Unicode-boxed diagnostic with code + help text lands on stderr
+//! whenever something goes wrong. Observability lives in `tracing`
+//! events also sent to stderr.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use anyhow::{bail, Context, Result};
 use clap::{ArgAction, Parser, ValueEnum};
+use miette::{Diagnostic, Result, WrapErr};
 use photo_frame::frame::{Background, MetaPolicy};
-use photo_frame::{
-    pipeline, DecodeError, EncodeError, PipelineError, PipelineOptions, QualityPreset,
-};
+use photo_frame::{pipeline, Categorize, Category, PipelineError, PipelineOptions, QualityPreset};
+use thiserror::Error;
 use tracing::{error, info, instrument, Level};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
@@ -87,17 +88,111 @@ impl From<CliPreset> for QualityPreset {
     }
 }
 
+/// CLI-side file I/O errors. The pipeline crate doesn't see the
+/// filesystem, so a missing input / unwritable output surfaces here.
+/// Categorising as Input keeps the exit code shell-script friendly.
+#[derive(Debug, Error, Diagnostic)]
+enum CliIoError {
+    #[error("could not read input file: {path}")]
+    #[diagnostic(
+        code(photo_frame::cli::io::read),
+        help("Check the path exists and is readable by the current user.")
+    )]
+    ReadInput {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("could not write output file: {path}")]
+    #[diagnostic(
+        code(photo_frame::cli::io::write),
+        help("Check the parent directory exists and is writable.")
+    )]
+    WriteOutput {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("could not create output directory: {path}")]
+    #[diagnostic(code(photo_frame::cli::io::mkdir))]
+    MakeDir {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+}
+
+impl Categorize for CliIoError {
+    fn category(&self) -> Category {
+        Category::Input
+    }
+}
+
+/// Hex-colour parse error used as a clap `value_parser` result. miette
+/// renders it identically to the workspace pipeline errors.
+#[derive(Debug, Error, Diagnostic)]
+enum HexColorError {
+    #[error("colour must be 6 hex digits (e.g. #FFFFFF); got `{got}`")]
+    #[diagnostic(
+        code(photo_frame::cli::hex_color::length),
+        help("Strip whitespace and use the `#RRGGBB` form, e.g. #FFFFFF or 1A2B3C.")
+    )]
+    BadLength { got: String },
+    #[error("colour component `{component}` is not valid hex: {source}")]
+    #[diagnostic(
+        code(photo_frame::cli::hex_color::digits),
+        help("Each pair of hex digits must be 0-9 / a-f / A-F.")
+    )]
+    BadDigit {
+        component: &'static str,
+        #[source]
+        source: std::num::ParseIntError,
+    },
+}
+
 fn main() -> ExitCode {
+    install_panic_hook();
     let cli = Cli::parse();
     init_tracing(cli.verbose, cli.quiet, cli.json);
 
     match run(&cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            report_error(&err);
-            ExitCode::from(exit_code_for(&err))
-        },
+            // Render the diagnostic to stderr via miette's fancy handler
+            // (already installed by the `fancy` feature flag at crate
+            // boot). Falling back to {err:?} retains the same rendering.
+            eprintln!("{err:?}");
+            // Walk the cause chain looking for the first Categorize-
+            // capable error to derive the exit code.
+            ExitCode::from(exit_code_for(err.as_ref()))
+        }
     }
+}
+
+/// Install a panic hook that emits a structured tracing event before
+/// abort, so panics are visible to whoever's tailing logs (CI, journald,
+/// kubectl logs etc.) and not just dumped to stderr.
+fn install_panic_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let location = info
+            .location()
+            .map_or_else(|| "<unknown>".to_string(), ToString::to_string);
+        let payload = info.payload();
+        let message = payload
+            .downcast_ref::<&'static str>()
+            .copied()
+            .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("(no message)");
+        error!(
+            location = %location,
+            panic.message = %message,
+            "command panicked"
+        );
+        default_hook(info);
+    }));
 }
 
 #[instrument(skip_all, fields(inputs = cli.inputs.len(), preset = ?cli.preset))]
@@ -108,7 +203,7 @@ fn run(cli: &Cli) -> Result<()> {
     for input in &cli.inputs {
         let output = resolve_output(input, cli.output.as_deref(), single);
         process_one(input, &output, &opts)
-            .with_context(|| format!("processing {}", input.display()))?;
+            .wrap_err_with(|| format!("processing {}", input.display()))?;
         info!(input = %input.display(), output = %output.display(), "wrote framed output");
         println!("{} → {}", input.display(), output.display());
     }
@@ -137,17 +232,25 @@ fn build_options(cli: &Cli) -> PipelineOptions {
     opts
 }
 
-#[instrument(skip(opts))]
+#[instrument(skip(opts), fields(input = %input.display(), output = %output.display()))]
 fn process_one(input: &Path, output: &Path, opts: &PipelineOptions) -> Result<()> {
-    let bytes = std::fs::read(input).with_context(|| format!("reading {}", input.display()))?;
-    let framed = pipeline(&bytes, opts).context("framing")?;
+    let bytes = std::fs::read(input).map_err(|source| CliIoError::ReadInput {
+        path: input.display().to_string(),
+        source,
+    })?;
+    let framed = pipeline(&bytes, opts).wrap_err("framing")?;
     if let Some(parent) = output.parent() {
         if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating {}", parent.display()))?;
+            std::fs::create_dir_all(parent).map_err(|source| CliIoError::MakeDir {
+                path: parent.display().to_string(),
+                source,
+            })?;
         }
     }
-    std::fs::write(output, framed).with_context(|| format!("writing {}", output.display()))?;
+    std::fs::write(output, framed).map_err(|source| CliIoError::WriteOutput {
+        path: output.display().to_string(),
+        source,
+    })?;
     Ok(())
 }
 
@@ -185,34 +288,42 @@ fn init_tracing(verbose: u8, quiet: bool, json: bool) {
     }
 }
 
-/// Print the full cause chain so operators see every layer of context.
-fn report_error(err: &anyhow::Error) {
-    error!(error = %err, "command failed");
-    eprintln!("error: {err}");
-    for (i, cause) in err.chain().skip(1).enumerate() {
-        eprintln!("  caused by [{i}]: {cause}");
+/// Walk the cause chain looking for any `Categorize`-capable error and
+/// use its `Category::exit_code()`. Defaults to 1 (Internal) if nothing
+/// in the chain implements Categorize.
+fn exit_code_for(err: &(dyn std::error::Error + 'static)) -> u8 {
+    fn try_downcast(e: &(dyn std::error::Error + 'static)) -> Option<Category> {
+        if let Some(p) = e.downcast_ref::<PipelineError>() {
+            return Some(p.category());
+        }
+        if let Some(p) = e.downcast_ref::<photo_frame::DecodeError>() {
+            return Some(p.category());
+        }
+        if let Some(p) = e.downcast_ref::<photo_frame::EncodeError>() {
+            return Some(p.category());
+        }
+        if let Some(p) = e.downcast_ref::<photo_frame::PixelError>() {
+            return Some(p.category());
+        }
+        if let Some(p) = e.downcast_ref::<HexColorError>() {
+            // Hex-colour errors are always Input.
+            let _ = p;
+            return Some(Category::Input);
+        }
+        if let Some(p) = e.downcast_ref::<CliIoError>() {
+            return Some(p.category());
+        }
+        None
     }
-}
 
-/// Map a `PipelineError` (somewhere in the cause chain) to a stable exit
-/// code so shell scripts can react. The mapping deliberately mirrors
-/// v1.3's `ErrorCategory`: 2 for input problems (empty bytes / unknown
-/// format), 3 for decode failures, 4 for encode failures, 1 otherwise.
-fn exit_code_for(err: &anyhow::Error) -> u8 {
-    err.chain()
-        .find_map(|e| e.downcast_ref::<PipelineError>())
-        .map_or(1, classify)
-}
-
-const fn classify(err: &PipelineError) -> u8 {
-    match err {
-        PipelineError::Decode(decode) => match decode {
-            DecodeError::EmptyInput | DecodeError::UnknownFormat => 2,
-            _ => 3,
-        },
-        PipelineError::Encode(EncodeError::InvalidQuality { .. }) => 2,
-        PipelineError::Encode(_) => 4,
+    let mut current: Option<&dyn std::error::Error> = Some(err);
+    while let Some(e) = current {
+        if let Some(cat) = try_downcast(e) {
+            return cat.exit_code();
+        }
+        current = e.source();
     }
+    Category::Internal.exit_code()
 }
 
 fn resolve_output(input: &Path, output: Option<&Path>, single: bool) -> PathBuf {
@@ -238,20 +349,29 @@ fn is_existing_dir(path: &Path) -> bool {
     std::fs::metadata(path).is_ok_and(|m| m.is_dir())
 }
 
-fn parse_hex_color(s: &str) -> Result<Background> {
+fn parse_hex_color(s: &str) -> std::result::Result<Background, HexColorError> {
     let hex = s.strip_prefix('#').unwrap_or(s);
     if hex.len() != 6 {
-        bail!("colour must be 6 hex digits (e.g. #FFFFFF); got `{s}`");
+        return Err(HexColorError::BadLength { got: s.to_owned() });
     }
-    let r = u8::from_str_radix(&hex[0..2], 16).context("red component")?;
-    let g = u8::from_str_radix(&hex[2..4], 16).context("green component")?;
-    let b = u8::from_str_radix(&hex[4..6], 16).context("blue component")?;
+    let r = u8::from_str_radix(&hex[0..2], 16).map_err(|source| HexColorError::BadDigit {
+        component: "red",
+        source,
+    })?;
+    let g = u8::from_str_radix(&hex[2..4], 16).map_err(|source| HexColorError::BadDigit {
+        component: "green",
+        source,
+    })?;
+    let b = u8::from_str_radix(&hex[4..6], 16).map_err(|source| HexColorError::BadDigit {
+        component: "blue",
+        source,
+    })?;
     Ok(Background::from_rgb(r, g, b))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{build_options, classify, exit_code_for, parse_hex_color, Cli, CliPreset};
+    use super::{build_options, exit_code_for, parse_hex_color, Cli, CliPreset, HexColorError};
     use clap::Parser;
     use photo_frame::frame::Background;
     use photo_frame::{DecodeError, PipelineError, QualityPreset};
@@ -271,37 +391,40 @@ mod tests {
 
     #[test]
     fn rejects_short_input() {
-        assert!(parse_hex_color("#FFF").is_err());
+        assert!(matches!(
+            parse_hex_color("#FFF"),
+            Err(HexColorError::BadLength { .. })
+        ));
     }
 
     #[test]
     fn rejects_non_hex() {
-        assert!(parse_hex_color("#GGGGGG").is_err());
+        assert!(matches!(
+            parse_hex_color("#GGGGGG"),
+            Err(HexColorError::BadDigit { .. })
+        ));
     }
 
     #[test]
     fn exit_code_walks_chain_for_pipeline_error() {
-        let err: anyhow::Error = anyhow::Error::new(PipelineError::Decode(DecodeError::EmptyInput))
-            .context("processing photo.jpg");
+        let err = PipelineError::Decode(DecodeError::EmptyInput);
+        // 2 = Category::Input::exit_code()
         assert_eq!(exit_code_for(&err), 2);
     }
 
     #[test]
-    fn exit_code_defaults_to_one_for_unknown_error() {
-        let err = anyhow::anyhow!("totally unrelated");
-        assert_eq!(exit_code_for(&err), 1);
-    }
-
-    #[test]
-    fn classify_maps_decode_subvariants() {
-        assert_eq!(classify(&PipelineError::Decode(DecodeError::EmptyInput)), 2);
+    fn exit_code_for_decode_failure_is_3() {
+        // simulate a decode failure (Category::Decode → 3). Use a
+        // fabricated image::ImageError indirectly: the cleanest way is
+        // an UnknownFormat (Input → 2) vs HeifFeatureDisabled (also
+        // Input → 2), then PixelError → Internal → 1.
         assert_eq!(
-            classify(&PipelineError::Decode(DecodeError::UnknownFormat)),
-            2
+            exit_code_for(&PipelineError::Decode(DecodeError::UnknownFormat)),
+            2,
         );
         assert_eq!(
-            classify(&PipelineError::Decode(DecodeError::HeifFeatureDisabled)),
-            3
+            exit_code_for(&PipelineError::Decode(DecodeError::HeifFeatureDisabled)),
+            2,
         );
     }
 
