@@ -117,19 +117,20 @@ container_measurements() {
     return 0
   fi
 
-  # base docker run wrapper that mounts the workspace and uses sccache-friendly env
-  local DR="docker run --rm \
-    -v $(pwd):/workspace:cached \
-    -w /workspace \
-    -u $(id -u):$(id -g) \
-    -e CARGO_HOME=/workspace/.cargo-cache-docker \
-    -e CARGO_TARGET_DIR=/workspace/target-docker \
-    $image"
+  # Use `docker compose run --rm` so the bench shares the same named
+  # volumes (cargo-registry, cargo-git, target-cache, node-cache) as the
+  # interactive dev session — measurements reflect what a developer's
+  # actual `docker compose run dev <cmd>` would experience.
+  #
+  # Phase 1.4 removed the older `--mount type=bind` to `.cargo-cache-docker`
+  # / `target-docker` workaround dirs; compose's named volumes are now the
+  # only cache surface inside the container.
+  local DC="docker compose run --rm --no-deps dev"
 
-  bench "docker_just_ci"       1 2 -- "$DR bash -c 'just ci 2>&1 | tail -3'"
-  bench "docker_cargo_build"   1 2 -- "$DR bash -c 'cargo build --workspace 2>&1 | tail -3'"
-  bench "docker_cargo_test"    1 2 -- "$DR bash -c 'cargo test --workspace --all-targets --no-fail-fast 2>&1 | tail -3'"
-  bench "docker_cargo_clippy"  1 2 -- "$DR bash -c 'cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tail -3'"
+  bench "docker_just_ci"      1 2 -- "$DC bash -c 'just ci 2>&1 | tail -3'"
+  bench "docker_cargo_build"  1 2 -- "$DC bash -c 'cargo build --workspace 2>&1 | tail -3'"
+  bench "docker_cargo_test"   1 2 -- "$DC bash -c 'cargo nextest run --workspace --all-targets 2>&1 | tail -3'"
+  bench "docker_cargo_clippy" 1 2 -- "$DC bash -c 'cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tail -3'"
 }
 
 # ── quick subset ─────────────────────────────────────────────────────────

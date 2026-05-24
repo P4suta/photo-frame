@@ -31,12 +31,6 @@ coverage
 # Lefthook artifacts
 .lefthook-local.yml
 
-# Ad-hoc docker-side cargo caches used during local heif verification.
-# Inside the dev container these live under /workspace, so they show up
-# in the host bind mount but are not source.
-/.cargo-cache-docker/
-/target-docker/
-
 # scripts/bench-build.sh and scripts/timings.sh write per-run artefacts
 # under artifacts/. The committed `BENCHMARKS.md` carries the curated
 # history; the raw json / html reports are local-only.
