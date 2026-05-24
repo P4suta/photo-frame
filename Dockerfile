@@ -50,7 +50,9 @@ RUN cargo install --locked just \
  && cargo install --locked taplo-cli \
  && cargo install --locked typos-cli \
  && cargo install --locked wasm-pack \
- && cargo install --locked cargo-deny
+ && cargo install --locked cargo-deny \
+ && cargo install --locked cargo-nextest \
+ && cargo install --locked hyperfine
 
 # biome (Rust, npm-published) and lefthook (Go, npm-published). bun is
 # npm-compatible so a single `bun install -g` covers both — no need to
