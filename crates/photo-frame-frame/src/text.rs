@@ -3,6 +3,10 @@
 //! The font is statically embedded so the renderer has no filesystem
 //! dependency at runtime — important for the WASM target and convenient
 //! for single-binary CLI distribution.
+//!
+//! Ink colour is decided per-renderer instance (not a `const`) so a
+//! given canvas can pair the right contrast with its frame theme — see
+//! [`crate::options::FrameTheme`].
 
 use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
 use image::{Rgba, RgbaImage};
@@ -17,9 +21,6 @@ use crate::num::round_to_u32_f32;
 const REGULAR_BYTES: &[u8] = include_bytes!("../assets/fonts/Geist/Geist-Regular.otf");
 const MEDIUM_BYTES: &[u8] = include_bytes!("../assets/fonts/Geist/Geist-Medium.otf");
 
-/// Soft ink — pure black floats above paper-white, this sits flush.
-const INK: Rgba<u8> = Rgba([60, 60, 60, 255]);
-
 #[derive(Copy, Clone, Debug)]
 pub(crate) enum Weight {
     Regular,
@@ -30,15 +31,17 @@ pub(crate) enum Weight {
 pub(crate) struct Renderer {
     regular: FontRef<'static>,
     medium: FontRef<'static>,
+    ink: Rgba<u8>,
 }
 
 impl Renderer {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(ink: Rgba<u8>) -> Self {
         Self {
             regular: FontRef::try_from_slice(REGULAR_BYTES)
                 .expect("embedded Geist-Regular.otf must parse"),
             medium: FontRef::try_from_slice(MEDIUM_BYTES)
                 .expect("embedded Geist-Medium.otf must parse"),
+            ink,
         }
     }
 
@@ -58,7 +61,7 @@ impl Renderer {
         }
         let font = self.font_for(weight);
         let scale = PxScale::from(font_height);
-        draw_text_mut(canvas, INK, to_i32(x), to_i32(top_y), scale, font, text);
+        draw_text_mut(canvas, self.ink, to_i32(x), to_i32(top_y), scale, font, text);
     }
 
     /// Draw `text` right-aligned so that its right edge lands at
@@ -80,7 +83,7 @@ impl Renderer {
         let scale = PxScale::from(font_height);
         let width = round_to_u32_f32(text_width(font, scale, text));
         let x = to_i32(right_x).saturating_sub(to_i32(width)).max(0);
-        draw_text_mut(canvas, INK, x, to_i32(top_y), scale, font, text);
+        draw_text_mut(canvas, self.ink, x, to_i32(top_y), scale, font, text);
     }
 
     const fn font_for(&self, weight: Weight) -> &FontRef<'static> {
@@ -109,9 +112,10 @@ fn text_width<F: Font>(font: &F, scale: PxScale, text: &str) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::Renderer;
+    use image::Rgba;
 
     #[test]
     fn renderer_constructs_without_panicking() {
-        let _ = Renderer::new();
+        let _ = Renderer::new(Rgba([60, 60, 60, 255]));
     }
 }

@@ -1,8 +1,19 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup } from 'solid-js';
 import { DropZone } from './DropZone';
-import { type FrameOptions, frameImage } from './frame-client';
+import { type FrameOptions, type FrameTheme, frameImage } from './frame-client';
 
 const PREVIEW_LONG_EDGE = 1600;
+
+/**
+ * Theme options surfaced in the UI. Labels are display-only; the
+ * `value` is what gets handed to the WASM bridge — keep these labels
+ * in sync with `FrameTheme::label()` in
+ * `crates/photo-frame-frame/src/options.rs`.
+ */
+const THEMES = [
+  { value: 'paper' as const, label: 'Paper', description: 'White frame, dark text' },
+  { value: 'ink' as const, label: 'Ink', description: 'Soft-black frame, light text' },
+] satisfies ReadonlyArray<{ value: FrameTheme; label: string; description: string }>;
 
 /**
  * Mirror of `photo_frame_core::QualityPreset` — keep in sync with
@@ -30,7 +41,7 @@ export const App = () => {
   const [quality, setQuality] = createSignal<number>(PRESETS.standard.quality);
   const [resize, setResize] = createSignal(false);
   const [resizePx, setResizePx] = createSignal<number>(2048);
-  const [background, setBackground] = createSignal('#ffffff');
+  const [theme, setTheme] = createSignal<FrameTheme>('paper');
   const [showMeta, setShowMeta] = createSignal(true);
   const [status, setStatus] = createSignal('');
   const [busy, setBusy] = createSignal(false);
@@ -51,17 +62,12 @@ export const App = () => {
     resize() ? Math.max(1, resizePx()) : null,
   );
 
-  const buildOptions = (maxLongEdge: number | null): FrameOptions => {
-    const [r, g, b] = parseHex(background());
-    return {
-      jpeg_quality: quality(),
-      bg_r: r,
-      bg_g: g,
-      bg_b: b,
-      show_meta: showMeta(),
-      max_long_edge: maxLongEdge,
-    };
-  };
+  const buildOptions = (maxLongEdge: number | null): FrameOptions => ({
+    jpeg_quality: quality(),
+    theme: theme(),
+    show_meta: showMeta(),
+    max_long_edge: maxLongEdge,
+  });
 
   // Re-frame the preview whenever any input changes. Touching the signals
   // here registers them with Solid's dependency tracker; the effect re-runs
@@ -184,14 +190,28 @@ export const App = () => {
                 <span class="control-suffix">px</span>
               </div>
 
-              <label class="control-row">
-                <span class="control-label">Background</span>
-                <input
-                  type="color"
-                  value={background()}
-                  onInput={(event) => setBackground(event.currentTarget.value)}
-                />
-              </label>
+              <div class="control-row">
+                <span class="control-label">Theme</span>
+                <div class="segmented" role="radiogroup" aria-label="Frame theme">
+                  <For each={THEMES}>
+                    {(t) => (
+                      <>
+                        {/* biome-ignore lint/a11y/useSemanticElements: matches the Preset segmented control above; keeps a single visual idiom for grouped option pickers. */}
+                        <button
+                          type="button"
+                          role="radio"
+                          aria-checked={theme() === t.value}
+                          title={t.description}
+                          classList={{ active: theme() === t.value }}
+                          onClick={() => setTheme(t.value)}
+                        >
+                          {t.label}
+                        </button>
+                      </>
+                    )}
+                  </For>
+                </div>
+              </div>
 
               <label class="control-row">
                 <span class="control-label">
@@ -228,16 +248,6 @@ export const App = () => {
     </main>
   );
 };
-
-function parseHex(hex: string): [number, number, number] {
-  const cleaned = hex.replace(/^#/, '');
-  if (cleaned.length !== 6) return [255, 255, 255];
-  return [
-    Number.parseInt(cleaned.slice(0, 2), 16),
-    Number.parseInt(cleaned.slice(2, 4), 16),
-    Number.parseInt(cleaned.slice(4, 6), 16),
-  ];
-}
 
 function framedName(original: string): string {
   const dot = original.lastIndexOf('.');

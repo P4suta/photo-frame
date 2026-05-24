@@ -17,6 +17,7 @@ use crate::text::{Renderer, Weight};
     fields(
         photo_width = photo.pixels.width(),
         photo_height = photo.pixels.height(),
+        theme = opts.theme.label(),
         meta_policy = ?opts.meta_policy,
         max_long_edge = ?opts.max_long_edge,
         canvas_width = tracing::field::Empty,
@@ -85,8 +86,7 @@ fn compose_canvas(
     opts: &FrameOptions,
 ) -> RgbaImage {
     let (canvas_w, canvas_h) = layout.canvas_size;
-    let [r, g, b] = opts.background.rgb();
-    let mut canvas = RgbaImage::from_pixel(canvas_w, canvas_h, Rgba([r, g, b, 255]));
+    let mut canvas = RgbaImage::from_pixel(canvas_w, canvas_h, opts.theme.background());
 
     imageops::replace(
         &mut canvas,
@@ -96,7 +96,7 @@ fn compose_canvas(
     );
 
     if let Some(ml) = layout.meta.as_ref() {
-        let renderer = Renderer::new();
+        let renderer = Renderer::new(opts.theme.ink());
         draw_caption(&mut canvas, &renderer, ml, caption, canvas_w);
     }
 
@@ -250,6 +250,41 @@ mod tests {
             out.as_rgba8().len(),
             (out.width() * out.height() * 4) as usize
         );
+    }
+
+    #[test]
+    fn ink_theme_paints_corner_pixels_with_soft_black() {
+        use crate::options::FrameTheme;
+        use image::Rgba;
+        let photo = solid_photo(80, 60, Provenance::default());
+        let out = render(
+            &photo,
+            &FrameOptions {
+                theme: FrameTheme::Ink,
+                ..Default::default()
+            },
+        );
+        let buf = out.as_rgba8();
+        // Top-left and bottom-right of the framed canvas sit on the
+        // border (not on the photo), so they must show the Ink fill.
+        let top_left = &buf[0..4];
+        assert_eq!(
+            top_left,
+            Rgba([0x1A, 0x1A, 0x1A, 255]).0.as_slice(),
+            "ink-theme border must paint soft-black at the canvas corner",
+        );
+        let last_pixel = (out.width() as usize) * (out.height() as usize) * 4 - 4;
+        let bottom_right = &buf[last_pixel..last_pixel + 4];
+        assert_eq!(bottom_right, Rgba([0x1A, 0x1A, 0x1A, 255]).0.as_slice());
+    }
+
+    #[test]
+    fn paper_theme_paints_corner_pixels_with_white() {
+        use image::Rgba;
+        let photo = solid_photo(80, 60, Provenance::default());
+        let out = render(&photo, &FrameOptions::default());
+        let buf = out.as_rgba8();
+        assert_eq!(&buf[0..4], Rgba([255, 255, 255, 255]).0.as_slice());
     }
 
     #[test]
