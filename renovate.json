@@ -1,6 +1,11 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended", ":semanticCommits", ":dependencyDashboard", "schedule:weekly"],
+  "extends": [
+    "config:recommended",
+    ":semanticCommits",
+    ":dependencyDashboard",
+    "schedule:weekly"
+  ],
   "labels": ["dependencies"],
   "rangeStrategy": "bump",
   "lockFileMaintenance": { "enabled": true, "schedule": ["before 6am on monday"] },
@@ -23,8 +28,16 @@
       "groupName": "docker base images"
     },
     {
+      "description": "Project policy: track latest. Minor + patch bumps auto-merge once CI is green; only majors gate on human review.",
+      "matchUpdateTypes": ["minor", "patch", "digest", "pin", "lockFileMaintenance"],
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true
+    },
+    {
       "matchUpdateTypes": ["major"],
-      "addLabels": ["major-bump"]
+      "addLabels": ["major-bump"],
+      "automerge": false
     }
   ],
   "customManagers": [
