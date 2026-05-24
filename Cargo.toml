@@ -34,8 +34,8 @@ image = { version = "0.25", default-features = false, features = [
 ] }
 kamadak-exif = "0.6"
 ab_glyph = "0.2"
-imageproc = { version = "0.25", default-features = false }
-thiserror = "1"
+imageproc = { version = "0.26", default-features = false, features = ["text"] }
+thiserror = "2"
 # miette provides typed `Diagnostic` derivation (a richer companion to
 # thiserror) so every error variant carries a stable diagnostic code, a
 # severity, and a `help` string the CLI's renderer can show as a
@@ -50,7 +50,7 @@ clap               = { version = "4", features = ["derive"] }
 # never pulls these — the Web Worker does its own off-main-thread
 # strategy that does not require a runtime in the wasm binary.
 rayon              = "1"
-indicatif          = "0.17"
+indicatif          = "0.18"
 num_cpus           = "1"
 # Drop-in `Instant` shim that works on wasm32-unknown-unknown
 # (delegates to `performance.now()` in the browser). Native targets
