@@ -62,7 +62,7 @@ whose fields are filled in over the span's lifetime via
 | `decode.exif.camera.absent`           | debug | decode | —                            | Neither Make nor Model EXIF tag present |
 | `decode.exif.lens.absent`             | debug | decode | —                            | Neither LensMake nor LensModel EXIF tag present |
 | `decode.exif.exposure.absent`         | debug | decode | —                            | No exposure facts present (focal/aperture/shutter/iso all missing) |
-| `decode.exif.datetime.exhausted`      | debug | decode | `candidates`                 | All three datetime candidate tags (Original/Digitized/DateTime) missing or unparseable |
+| `decode.exif.datetime.exhausted`      | debug | decode | `candidates`                 | All three datetime candidate tags (Original/Digitized/DateTime) missing or unparsable |
 | `decode.heif.stride_padding`          | debug | decode (feature=heif) | `stride`, `packed_row` | libheif plane has alignment padding; row-by-row repack happens |
 | `decode.heif.truncated`               | warn  | decode (feature=heif) | `expected_rows`, `got_rows` | libheif plane data shorter than declared stride*height |
 | `wasm.frame.options_invalid`          | error | wasm   | `error`                      | serde-wasm-bindgen failed to deserialise the JS-side options object |

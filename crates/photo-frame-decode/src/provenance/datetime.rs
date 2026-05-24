@@ -33,7 +33,7 @@ pub(crate) fn captured_at(exif: &Exif) -> Option<DateTime> {
     tracing::debug!(
         event_id = "decode.exif.datetime.exhausted",
         candidates = CANDIDATES.len(),
-        "every EXIF datetime candidate missing or unparseable; captured_at = None"
+        "every EXIF datetime candidate missing or unparsable; captured_at = None"
     );
     None
 }
