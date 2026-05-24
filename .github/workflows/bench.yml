@@ -41,7 +41,11 @@ jobs:
 
       - uses: taiki-e/install-action@v2
         with:
-          tool: hyperfine,just,wasm-pack,jq
+          # jq is preinstalled on ubuntu-latest runners; install-action
+          # has no jq prebuilt binary so listing it falls through to a
+          # cargo install of an unrelated library crate of the same name
+          # and fails the job.
+          tool: hyperfine,just,wasm-pack
 
       - name: Bench (host subset)
         id: bench
