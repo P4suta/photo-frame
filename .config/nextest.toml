@@ -1,0 +1,43 @@
+# cargo-nextest configuration.
+# Docs: https://nexte.st/docs/configuration/
+#
+# Phase 1.3: we adopt nextest as the project's test runner. Raw wall-clock
+# is within ±200ms of `cargo test` at our current scale (155 tests, one
+# 1.2 s dominant test), but nextest pays for itself elsewhere:
+#   - per-test timing visible during dev (`pass [0.005s] crate::test_name`)
+#   - JUnit XML output for CI integration (Phase 2)
+#   - automatic flake retry (essential once proptest lands in Phase 5)
+#   - test partitioning / sharding ready for future multi-host CI
+
+[profile.default]
+# Show what's happening in real time without overwhelming output.
+status-level = "skip"            # don't show "skipped" lines for filtered tests
+final-status-level = "slow"      # call out slow tests at the end
+failure-output = "immediate-final"
+success-output = "never"
+slow-timeout = { period = "30s", terminate-after = 3 }
+fail-fast = false
+
+# Heavy single tests (sns_preset_caps_output_dimensions in particular)
+# legitimately take >1s. Don't let nextest's progress bar flag those as
+# slow on every run.
+[[profile.default.overrides]]
+filter = "test(=sns_preset_caps_output_dimensions)"
+slow-timeout = { period = "10s", terminate-after = 3 }
+
+# ── ci profile ────────────────────────────────────────────────────────────
+# CI uses this via `cargo nextest run --profile ci`. Adds JUnit output and
+# retries flaky tests up to 2× before reporting failure.
+[profile.ci]
+status-level = "all"
+final-status-level = "flaky"
+failure-output = "immediate-final"
+success-output = "never"
+slow-timeout = { period = "60s", terminate-after = 2 }
+retries = 2
+fail-fast = false
+
+[profile.ci.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true

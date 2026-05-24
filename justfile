@@ -51,7 +51,10 @@ lint-typos:
 # ── Tests ────────────────────────────────────────────────────────────────────
 
 test:
-    cargo test --workspace --all-targets
+    cargo nextest run --workspace --all-targets
+    # Doc tests aren't covered by nextest; run them separately so a doc
+    # comment that compiles but doesn't run keeps tripping the gate.
+    cargo test --workspace --doc --no-fail-fast
 
 # ── WASM ─────────────────────────────────────────────────────────────────────
 
