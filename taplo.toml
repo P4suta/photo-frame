@@ -4,10 +4,7 @@ exclude = [
     "node_modules/**",
     "**/pkg/**",
     "**/dist/**",
-    # Ad-hoc cargo caches used during container-side heif verification
-    # (see .gitignore — these are bind-mount artefacts, not source).
-    ".cargo-cache-docker/**",
-    "target-docker/**",
+    "artifacts/**",
 ]
 
 [formatting]
