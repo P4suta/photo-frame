@@ -1,0 +1,128 @@
+:root {
+  color-scheme: light dark;
+  --ink: #1a1a1a;
+  --ink-soft: #555;
+  --paper: #fafafa;
+  --accent: #2563eb;
+  --gap: 1.5rem;
+  --radius: 0.5rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #f0f0f0;
+    --ink-soft: #999;
+    --paper: #1a1a1a;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 16px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+}
+
+main {
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: 3rem 1.5rem;
+}
+
+header {
+  margin-bottom: var(--gap);
+}
+
+h1 {
+  margin: 0;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}
+
+.subtitle {
+  margin: 0.25rem 0 0;
+  color: var(--ink-soft);
+}
+
+.drop {
+  border: 1px dashed var(--ink-soft);
+  border-radius: var(--radius);
+  padding: 4rem 1.5rem;
+  text-align: center;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.drop.over {
+  background: rgba(37, 99, 235, 0.05);
+  border-color: var(--accent);
+}
+
+.link {
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+#preview {
+  margin-top: var(--gap);
+}
+
+#preview-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius);
+  box-shadow: 0 1px 8px rgba(0, 0, 0, 0.06);
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap);
+  align-items: center;
+  margin-top: var(--gap);
+}
+
+.controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--ink-soft);
+}
+
+button {
+  margin-left: auto;
+  background: var(--accent);
+  color: white;
+  border: 0;
+  padding: 0.6rem 1.2rem;
+  border-radius: var(--radius);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+
+.status {
+  color: var(--ink-soft);
+  font-size: 0.875rem;
+}
+
+footer {
+  margin-top: 3rem;
+  color: var(--ink-soft);
+  font-size: 0.875rem;
+}
+
+a {
+  color: var(--accent);
+}

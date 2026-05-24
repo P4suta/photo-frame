@@ -1,0 +1,13 @@
+include = ["**/*.toml"]
+exclude = ["target/**", "node_modules/**", "**/pkg/**", "**/dist/**"]
+
+[formatting]
+align_entries        = true
+array_auto_collapse  = true
+array_auto_expand    = true
+column_width         = 100
+indent_string        = "    "
+reorder_keys         = false
+trailing_newline     = true
+compact_arrays       = true
+compact_inline_tables = false

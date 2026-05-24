@@ -1,0 +1,47 @@
+# cargo-deny configuration.
+#
+# This file is the contractual enforcement of the "Cargo dep tree must be
+# 100% Pure Rust" rule documented in the README. If a new transitive
+# dependency drags in *any* of the listed build-time crates, cargo-deny
+# fails in CI before the change can land. The list is small on purpose —
+# these are the canonical "this crate compiles C source or invokes a
+# system library finder" gatekeepers, and dependencies of *those* are what
+# really pull a C toolchain into the Rust build.
+#
+# Adding a new entry here is a one-way ratchet — discuss before relaxing.
+
+[graph]
+all-features = false
+no-default-features = false
+
+[bans]
+multiple-versions = "allow" # the dep graph naturally has dupes; not our fight
+wildcards = "allow"
+highlight = "all"
+deny = [
+    { name = "cc"          },
+    { name = "cc-rs"       },
+    { name = "bindgen"     },
+    { name = "pkg-config"  },
+    { name = "vcpkg"       },
+    { name = "cmake"       },
+    { name = "autotools"   },
+    { name = "meson"       },
+]
+
+[licenses]
+# We're not enforcing a license allowlist here; the v1 dep tree is hand-audited
+# (Apache-2.0 / MIT / OFL-1.1). Tighten in a later pass if desired.
+unused-allowed-license = "allow"
+confidence-threshold   = 0.93
+
+[advisories]
+# Advisories are a separate concern from C-purity; we let `cargo deny check
+# advisories` warn but gate CI only on `bans`.
+yanked          = "warn"
+unmaintained    = "workspace"
+ignore          = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git      = "deny"

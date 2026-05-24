@@ -1,0 +1,43 @@
+/target
+**/target
+**/*.rs.bk
+*.pdb
+
+# Cargo
+Cargo.lock.bak
+
+# Node
+node_modules
+**/node_modules
+**/pkg
+**/dist
+.vite
+.cache
+coverage
+
+# Editor / OS
+.idea
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.DS_Store
+*.swp
+*.swo
+
+# Local secrets / env
+.env
+.env.local
+
+# Lefthook artifacts
+.lefthook-local.yml
+
+# Contributors are free to drop sample photos into examples/ for local
+# experimentation, but we don't track any image binaries in the repo —
+# they tend to be large, personal, and never the right shape for what
+# someone else wants to test against.
+examples/*.JPG
+examples/*.JPEG
+examples/*.jpg
+examples/*.jpeg
+examples/*.png
+examples/*.PNG
