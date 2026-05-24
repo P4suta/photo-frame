@@ -23,6 +23,7 @@ photo-frame-types = { workspace = true }
 image             = { workspace = true }
 kamadak-exif      = { workspace = true }
 thiserror         = { workspace = true }
+miette            = { workspace = true }
 tracing           = { workspace = true }
 libheif-rs        = { version = "1", optional = true }
 

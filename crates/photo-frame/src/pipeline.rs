@@ -1,7 +1,9 @@
 //! Run the three pipeline stages back to back: decode → render → encode.
 
+use miette::Diagnostic;
 use photo_frame_decode::DecodeError;
 use photo_frame_encode::EncodeError;
+use photo_frame_types::{Categorize, Category};
 use thiserror::Error;
 
 use crate::options::PipelineOptions;
@@ -9,12 +11,28 @@ use crate::options::PipelineOptions;
 /// Errors the end-to-end [`pipeline`] can surface. Each variant wraps the
 /// originating stage's error so the caller can `match` on which stage
 /// failed without traversing source chains.
-#[derive(Debug, Error)]
+///
+/// `#[diagnostic(transparent)]` defers diagnostic info (code, help,
+/// labels) to the wrapped error — the pipeline itself adds no new
+/// diagnostic content beyond "which stage".
+#[derive(Debug, Error, Diagnostic)]
 pub enum PipelineError {
     #[error("decode failed")]
+    #[diagnostic(transparent)]
     Decode(#[from] DecodeError),
+
     #[error("encode failed")]
+    #[diagnostic(transparent)]
     Encode(#[from] EncodeError),
+}
+
+impl Categorize for PipelineError {
+    fn category(&self) -> Category {
+        match self {
+            Self::Decode(e) => e.category(),
+            Self::Encode(e) => e.category(),
+        }
+    }
 }
 
 /// Decode `bytes`, frame the image, and JPEG-encode the result.

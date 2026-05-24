@@ -15,6 +15,7 @@ path = "src/lib.rs"
 photo-frame-types = { workspace = true }
 image             = { workspace = true }
 thiserror         = { workspace = true }
+miette            = { workspace = true }
 tracing           = { workspace = true }
 
 [lints]
