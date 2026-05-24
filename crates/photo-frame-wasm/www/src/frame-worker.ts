@@ -1,23 +1,35 @@
 /**
- * Web Worker host for the WASM batch entry point.
+ * Web Worker host for every expensive WASM call.
  *
- * Lives off the main thread so a 100-image drop doesn't freeze the UI
- * while wasm-bindgen does its decode → frame → encode loop. The Worker
- * speaks a tiny ad-hoc protocol with `App.tsx`:
+ * One worker serves three modes — `prepare`, `encode`, `batch` — so the
+ * WASM module is initialised only once per page load. Single-image
+ * preview lives here for the same reason large batches do: `render_pixels`
+ * on a 24 MP photo takes 300–700 ms, and the main thread shouldn't pay
+ * that latency.
  *
- *   request:  { kind: 'batch'; items: BatchItem[]; options: FrameOptions }
- *   reply 1+: { kind: 'progress'; index; total; key }
- *   reply:    { kind: 'done'; results: BatchResult[] }
- *   reply:    { kind: 'error'; message: string }
+ * Protocol (every reply carries the same `requestId` the request did, so
+ * the main side can ignore stale replies after a fast slider drag):
  *
- * Because the Worker re-initialises the WASM module on its own thread,
- * the main-thread `frame()` function from `./frame-client.ts` is
- * unaffected — we still use it for the single-image preview path so
- * preview latency stays at one round-trip.
+ *   request:  { kind: 'prepare', requestId, bytes, frameOptions }
+ *   reply:    { kind: 'prepared', requestId, rgba, width, height }
+ *
+ *   request:  { kind: 'encode',  requestId, rgba, width, height, quality }
+ *   reply:    { kind: 'encoded', requestId, jpeg }
+ *
+ *   request:  { kind: 'batch',   items, options }   (no requestId — atomic)
+ *   reply 1+: { kind: 'progress', index, total, key }
+ *   reply:    { kind: 'done',     results }
+ *
+ *   reply:    { kind: 'error',   requestId | null, message }
+ *
+ * Byte buffers (`bytes`, `rgba`, `jpeg`) ride as transferables on both
+ * the request and the reply — the main thread sends a slice it owns,
+ * and gets a fresh buffer back. Slider-drag spam therefore never memcpies
+ * the cached RGBA.
  */
 
-import init, { frame_batch } from '../pkg/photo_frame_wasm.js';
-import type { FrameOptions } from './frame-client';
+import init, { encode_jpeg, frame_batch, render_pixels } from '../pkg/photo_frame_wasm.js';
+import type { FrameOptionsForPrepare, PipelineOptions } from './frame-client';
 
 export type BatchItem = {
   key: string;
@@ -38,12 +50,39 @@ export type BatchErrResult = {
 };
 export type BatchResult = BatchOkResult | BatchErrResult;
 
-export type WorkerRequest = {
+export type PrepareRequest = {
+  kind: 'prepare';
+  requestId: number;
+  bytes: Uint8Array;
+  frameOptions: FrameOptionsForPrepare;
+};
+export type EncodeRequest = {
+  kind: 'encode';
+  requestId: number;
+  rgba: Uint8Array;
+  width: number;
+  height: number;
+  quality: number;
+};
+export type BatchRequest = {
   kind: 'batch';
   items: BatchItem[];
-  options: FrameOptions;
+  options: PipelineOptions;
 };
+export type WorkerRequest = PrepareRequest | EncodeRequest | BatchRequest;
 
+export type PreparedReply = {
+  kind: 'prepared';
+  requestId: number;
+  rgba: Uint8Array;
+  width: number;
+  height: number;
+};
+export type EncodedReply = {
+  kind: 'encoded';
+  requestId: number;
+  jpeg: Uint8Array;
+};
 export type WorkerProgress = {
   kind: 'progress';
   index: number;
@@ -51,8 +90,12 @@ export type WorkerProgress = {
   key: string;
 };
 export type WorkerDone = { kind: 'done'; results: BatchResult[] };
-export type WorkerError = { kind: 'error'; message: string };
-export type WorkerReply = WorkerProgress | WorkerDone | WorkerError;
+export type WorkerError = {
+  kind: 'error';
+  requestId: number | null;
+  message: string;
+};
+export type WorkerReply = PreparedReply | EncodedReply | WorkerProgress | WorkerDone | WorkerError;
 
 let wasmReady: Promise<void> | null = null;
 const ensureReady = (): Promise<void> => {
@@ -60,40 +103,84 @@ const ensureReady = (): Promise<void> => {
   return wasmReady;
 };
 
+const post = (reply: WorkerReply, transfer: Transferable[] = []): void => {
+  // The worker-scope postMessage is typed as Window.postMessage in lib.dom;
+  // the cast keeps the transfer-list overload reachable without pulling in
+  // DOM lib types we don't need.
+  (postMessage as (msg: WorkerReply, transfer?: Transferable[]) => void)(reply, transfer);
+};
+
+const errorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
+
 self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
   const req = event.data;
-  if (req.kind !== 'batch') return;
 
   try {
     await ensureReady();
-    // Per-item progress is approximated: WASM returns the whole batch
-    // at once, so we report the start of each item *before* the call
-    // and the synthesised "done" event after. For per-item progress
-    // during the WASM call we'd need to slice the batch into N=1
-    // calls, which makes the WASM ↔ JS hop cost dominate.
-    //
-    // This works fine for our use case: the per-image wall time is
-    // mainly the decode/encode CPU, which the user already sees
-    // through the post-call results list.
-    for (let i = 0; i < req.items.length; i++) {
-      const item = req.items[i];
-      if (!item) continue;
-      const progress: WorkerProgress = {
-        kind: 'progress',
-        index: i,
-        total: req.items.length,
-        key: item.key,
-      };
-      postMessage(progress);
-    }
-    const raw = frame_batch(req.items, req.options) as unknown as BatchResult[];
-    const done: WorkerDone = { kind: 'done', results: raw };
-    postMessage(done);
   } catch (error) {
-    const failure: WorkerError = {
-      kind: 'error',
-      message: error instanceof Error ? error.message : String(error),
-    };
-    postMessage(failure);
+    const requestId = 'requestId' in req ? req.requestId : null;
+    post({ kind: 'error', requestId, message: errorMessage(error) });
+    return;
+  }
+
+  switch (req.kind) {
+    case 'prepare': {
+      try {
+        const out = render_pixels(req.bytes, req.frameOptions) as {
+          rgba: Uint8Array;
+          width: number;
+          height: number;
+        };
+        post(
+          {
+            kind: 'prepared',
+            requestId: req.requestId,
+            rgba: out.rgba,
+            width: out.width,
+            height: out.height,
+          },
+          [out.rgba.buffer],
+        );
+      } catch (error) {
+        post({ kind: 'error', requestId: req.requestId, message: errorMessage(error) });
+      }
+      return;
+    }
+
+    case 'encode': {
+      try {
+        const jpeg = encode_jpeg(req.rgba, req.width, req.height, req.quality);
+        post({ kind: 'encoded', requestId: req.requestId, jpeg }, [jpeg.buffer]);
+      } catch (error) {
+        post({ kind: 'error', requestId: req.requestId, message: errorMessage(error) });
+      }
+      return;
+    }
+
+    case 'batch': {
+      try {
+        // Per-item progress is approximated: WASM returns the whole batch
+        // at once, so we report the start of each item *before* the call
+        // and the synthesised "done" event after. Per-item progress mid-
+        // WASM-call would require N=1 slicing and the JS↔WASM hop cost
+        // would dominate for small inputs.
+        for (let i = 0; i < req.items.length; i++) {
+          const item = req.items[i];
+          if (!item) continue;
+          post({
+            kind: 'progress',
+            index: i,
+            total: req.items.length,
+            key: item.key,
+          });
+        }
+        const raw = frame_batch(req.items, req.options) as unknown as BatchResult[];
+        post({ kind: 'done', results: raw });
+      } catch (error) {
+        post({ kind: 'error', requestId: null, message: errorMessage(error) });
+      }
+      return;
+    }
   }
 });

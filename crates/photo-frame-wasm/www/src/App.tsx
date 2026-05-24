@@ -1,19 +1,24 @@
-import { For, Show, createEffect, createMemo, createSignal, onCleanup } from 'solid-js';
-import { DropZone, type DroppedFile } from './DropZone';
+import { createEffect, createMemo, createSignal, For, on, onCleanup, Show } from 'solid-js';
+import { type DroppedFile, DropZone } from './DropZone';
 import {
+  type BatchItem,
+  type BatchResult,
   type CaptionLayout,
-  type FrameOptions,
+  disposeWorker,
+  encodeJpeg,
+  type FrameOptionsForPrepare,
   type FrameTheme,
-  frameImage,
+  getWorker,
+  type PipelineOptions,
+  type PreparedPixels,
+  preparePixels,
+  type WorkerReply,
+  type WorkerRequest,
 } from './frame-client';
-import type {
-  BatchItem,
-  BatchResult,
-  WorkerReply,
-  WorkerRequest,
-} from './frame-worker';
 
 const PREVIEW_LONG_EDGE = 1600;
+const PREPARE_DEBOUNCE_MS = 120;
+const ESTIMATE_DEBOUNCE_MS = 220;
 
 const THEMES = [
   { value: 'paper' as const, label: 'Paper', description: 'White frame, dark text' },
@@ -22,7 +27,11 @@ const THEMES = [
 
 const LAYOUTS = [
   { value: 'edges' as const, label: 'Edges', description: 'Four-corner liit-style layout' },
-  { value: 'centered' as const, label: 'Centered', description: 'Both rows centred under the photo' },
+  {
+    value: 'centered' as const,
+    label: 'Centered',
+    description: 'Both rows centred under the photo',
+  },
 ] satisfies ReadonlyArray<{ value: CaptionLayout; label: string; description: string }>;
 
 /**
@@ -47,9 +56,13 @@ type BatchRow = {
   message?: string;
 };
 
+type Mode = 'empty' | 'single' | 'batch';
+
 export const App = () => {
   const [single, setSingle] = createSignal<DroppedFile | null>(null);
-  const [previewUrl, setPreviewUrl] = createSignal<string | null>(null);
+  const [previewPixels, setPreviewPixels] = createSignal<PreparedPixels | null>(null);
+  const [previewSize, setPreviewSize] = createSignal<number | null>(null);
+  const [previewElapsedMs, setPreviewElapsedMs] = createSignal<number | null>(null);
   const [batchRows, setBatchRows] = createSignal<BatchRow[]>([]);
   const [batchFiles, setBatchFiles] = createSignal<DroppedFile[] | null>(null);
   const [batchBusy, setBatchBusy] = createSignal(false);
@@ -63,13 +76,9 @@ export const App = () => {
   const [status, setStatus] = createSignal('');
   const [busy, setBusy] = createSignal(false);
 
-  // Worker is created lazily on the first batch run so the single-file
-  // preview path doesn't pay the cost of an extra WASM module init.
-  let worker: Worker | null = null;
-  const ensureWorker = (): Worker => {
-    worker ??= new Worker(new URL('./frame-worker.ts', import.meta.url), { type: 'module' });
-    return worker;
-  };
+  const mode = createMemo<Mode>(() =>
+    batchFiles() !== null ? 'batch' : single() !== null ? 'single' : 'empty',
+  );
 
   const applyPreset = (key: PresetKey): void => {
     setPreset(key);
@@ -87,16 +96,24 @@ export const App = () => {
     resize() ? Math.max(1, resizePx()) : null,
   );
 
-  const buildOptions = (maxLongEdge: number | null): FrameOptions => ({
-    jpeg_quality: quality(),
+  const buildFrameOptions = (maxLongEdge: number | null): FrameOptionsForPrepare => ({
     theme: theme(),
     layout: layout(),
     show_meta: showMeta(),
     max_long_edge: maxLongEdge,
   });
 
+  const buildPipelineOptions = (maxLongEdge: number | null): PipelineOptions => ({
+    ...buildFrameOptions(maxLongEdge),
+    jpeg_quality: quality(),
+  });
+
   const onDrop = (files: DroppedFile[]): void => {
     revokeAllBatchUrls();
+    setPreviewPixels(null);
+    setPreviewSize(null);
+    setPreviewElapsedMs(null);
+    setStatus('');
     const [first] = files;
     if (files.length === 1 && first) {
       setBatchFiles(null);
@@ -104,11 +121,6 @@ export const App = () => {
       setSingle(first);
     } else {
       setSingle(null);
-      const prev = previewUrl();
-      if (prev) {
-        URL.revokeObjectURL(prev);
-        setPreviewUrl(null);
-      }
       setBatchFiles(files);
       setBatchRows(
         files.map((f) => ({
@@ -126,37 +138,116 @@ export const App = () => {
     }
   };
 
-  // Single-image preview path. Touches every signal it depends on so
-  // Solid re-runs the effect when controls change.
-  createEffect(() => {
-    const current = single();
-    if (!current) return;
-    const options = buildOptions(Math.min(PREVIEW_LONG_EDGE, effectiveMaxLongEdge() ?? Infinity));
-    void renderPreview(current, options);
-  });
+  // ── prepare effect ───────────────────────────────────────────────
+  // Re-runs whenever the photo or any non-quality frame option changes.
+  // Debounced so chained signal updates (preset click changes quality
+  // and resize simultaneously) only fire one WASM call.
+  let prepareTimer: ReturnType<typeof setTimeout> | null = null;
+  let preparePending: { current: DroppedFile; opts: FrameOptionsForPrepare } | null = null;
+  createEffect(
+    on(
+      () => {
+        const current = single();
+        if (!current) return null;
+        return {
+          current,
+          opts: buildFrameOptions(Math.min(PREVIEW_LONG_EDGE, effectiveMaxLongEdge() ?? Infinity)),
+        };
+      },
+      (intent) => {
+        if (!intent) return;
+        preparePending = intent;
+        if (prepareTimer !== null) clearTimeout(prepareTimer);
+        prepareTimer = setTimeout(() => {
+          prepareTimer = null;
+          const pending = preparePending;
+          preparePending = null;
+          if (pending) void runPrepare(pending.current, pending.opts);
+        }, PREPARE_DEBOUNCE_MS);
+      },
+    ),
+  );
 
-  const renderPreview = async (current: DroppedFile, options: FrameOptions): Promise<void> => {
+  const runPrepare = async (current: DroppedFile, opts: FrameOptionsForPrepare): Promise<void> => {
     setStatus('Framing preview…');
     const started = performance.now();
     try {
-      const blob = await frameImage(current.data, options);
-      const url = URL.createObjectURL(blob);
-      const prev = previewUrl();
-      if (prev) URL.revokeObjectURL(prev);
-      setPreviewUrl(url);
-      setStatus(`Preview rendered in ${Math.round(performance.now() - started)} ms`);
+      const pixels = await preparePixels(current.data, opts);
+      // Guard against an even-newer file being dropped mid-flight.
+      if (single() !== current) return;
+      setPreviewPixels(pixels);
+      setPreviewElapsedMs(Math.round(performance.now() - started));
+      setStatus('');
     } catch (error) {
       setStatus(`Error: ${stringifyError(error)}`);
     }
   };
 
-  onCleanup(() => {
-    const url = previewUrl();
-    if (url) URL.revokeObjectURL(url);
-    revokeAllBatchUrls();
-    worker?.terminate();
+  // ── draw effect ──────────────────────────────────────────────────
+  // Paints the cached RGBA onto the canvas. Cheap; runs synchronously
+  // whenever previewPixels updates.
+  let canvasRef: HTMLCanvasElement | undefined;
+  createEffect(() => {
+    const pixels = previewPixels();
+    if (!pixels || !canvasRef) return;
+    canvasRef.width = pixels.width;
+    canvasRef.height = pixels.height;
+    const ctx = canvasRef.getContext('2d');
+    if (!ctx) return;
+    // ImageData wants Uint8ClampedArray<ArrayBuffer>. Constructing from
+    // the existing Uint8Array copies the bytes into a fresh ArrayBuffer
+    // — keeps TS happy about the SharedArrayBuffer vs ArrayBuffer split
+    // and is the documented shape for ImageData.
+    const view = new Uint8ClampedArray(pixels.rgba);
+    ctx.putImageData(new ImageData(view, pixels.width, pixels.height), 0, 0);
   });
 
+  // ── estimate effect ──────────────────────────────────────────────
+  // Re-encodes the cached RGBA at the current quality just to read the
+  // resulting byte length; no blob, no canvas redraw. Debounced so a
+  // slider drag posts ≤ ~5 encodes/second.
+  let estimateTimer: ReturnType<typeof setTimeout> | null = null;
+  let estimateToken = 0;
+  createEffect(
+    on(
+      () => {
+        const px = previewPixels();
+        if (!px) return null;
+        return { rgba: px.rgba, width: px.width, height: px.height, quality: quality() };
+      },
+      (intent) => {
+        if (!intent) return;
+        if (estimateTimer !== null) clearTimeout(estimateTimer);
+        estimateTimer = setTimeout(async () => {
+          estimateTimer = null;
+          const token = ++estimateToken;
+          try {
+            const jpeg = await encodeJpeg(
+              intent.rgba.slice(),
+              intent.width,
+              intent.height,
+              intent.quality,
+            );
+            if (token !== estimateToken) return;
+            setPreviewSize(jpeg.length);
+          } catch (error) {
+            if (token !== estimateToken) return;
+            setStatus(`Estimate failed: ${stringifyError(error)}`);
+          }
+        }, ESTIMATE_DEBOUNCE_MS);
+      },
+    ),
+  );
+
+  onCleanup(() => {
+    if (prepareTimer !== null) clearTimeout(prepareTimer);
+    if (estimateTimer !== null) clearTimeout(estimateTimer);
+    revokeAllBatchUrls();
+    disposeWorker();
+  });
+
+  // ── single-image download ────────────────────────────────────────
+  // Re-prepares at full resolution (no preview cap), then encodes.
   const onDownloadSingle = async (): Promise<void> => {
     const current = single();
     if (!current) return;
@@ -164,7 +255,9 @@ export const App = () => {
     setStatus('Framing at full resolution…');
     const started = performance.now();
     try {
-      const blob = await frameImage(current.data, buildOptions(effectiveMaxLongEdge()));
+      const full = await preparePixels(current.data, buildFrameOptions(effectiveMaxLongEdge()));
+      const jpeg = await encodeJpeg(full.rgba.slice(), full.width, full.height, quality());
+      const blob = new Blob([uint8ToBuffer(jpeg)], { type: 'image/jpeg' });
       triggerDownload(blob, framedName(current.name));
       setStatus(`Saved in ${Math.round(performance.now() - started)} ms`);
     } catch (error) {
@@ -174,12 +267,13 @@ export const App = () => {
     }
   };
 
+  // ── batch run ────────────────────────────────────────────────────
   const onProcessBatch = (): void => {
     const files = batchFiles();
     if (!files || batchBusy()) return;
     setBatchBusy(true);
     setStatus(`Processing ${files.length} files in the background…`);
-    const w = ensureWorker();
+    const w = getWorker();
     const handle = (event: MessageEvent<WorkerReply>): void => {
       const msg = event.data;
       if (msg.kind === 'progress') {
@@ -192,19 +286,21 @@ export const App = () => {
         const ok = msg.results.filter((r) => r.ok).length;
         setStatus(`Batch done: ${ok}/${msg.results.length} succeeded.`);
         w.removeEventListener('message', handle);
-      } else {
+      } else if (msg.kind === 'error' && msg.requestId === null) {
         setStatus(`Batch failed: ${msg.message}`);
         setBatchRows((rows) => rows.map((r) => ({ ...r, status: 'error', message: msg.message })));
         setBatchBusy(false);
         w.removeEventListener('message', handle);
       }
+      // Other replies (prepared/encoded/non-batch error) belong to other
+      // requesters and are ignored here.
     };
     w.addEventListener('message', handle);
     const items: BatchItem[] = files.map((f) => ({ key: f.name, bytes: f.data }));
     const request: WorkerRequest = {
       kind: 'batch',
       items,
-      options: buildOptions(effectiveMaxLongEdge()),
+      options: buildPipelineOptions(effectiveMaxLongEdge()),
     };
     w.postMessage(request);
   };
@@ -232,110 +328,108 @@ export const App = () => {
     anchor.click();
   };
 
-  const isBatch = createMemo(() => batchFiles() !== null);
-
+  // ── render ───────────────────────────────────────────────────────
   return (
-    <main>
-      <header>
-        <h1>photo-frame</h1>
-        <p class="subtitle">Liit-style golden-ratio framing — fully in your browser.</p>
+    <div class="app-shell" classList={{ [`mode-${mode()}`]: true }}>
+      <header class="app-header">
+        <div class="brand">
+          <span class="wordmark">photo-frame</span>
+          <span class="tagline">Liit-style golden-ratio framing, in your browser.</span>
+        </div>
+        <div class="header-status" aria-live="polite">
+          {status()}
+        </div>
       </header>
 
-      <DropZone onLoad={onDrop} />
+      <main class="stage">
+        <Show when={mode() === 'empty'}>
+          <div class="stage-empty">
+            <DropZone onLoad={onDrop} />
+          </div>
+        </Show>
 
-      <Show when={previewUrl()}>
-        {(url) => (
-          <section id="preview">
-            <img id="preview-image" src={url()} alt="Framed preview" />
-            <div class="controls">
-              <ControlsCommon
-                preset={preset()}
-                onPreset={applyPreset}
-                quality={quality()}
-                onQuality={setQuality}
-                resize={resize()}
-                onResize={setResize}
-                resizePx={resizePx()}
-                onResizePx={setResizePx}
-                theme={theme()}
-                onTheme={setTheme}
-                layout={layout()}
-                onLayout={setLayout}
-                showMeta={showMeta()}
-                onShowMeta={setShowMeta}
-              />
-              <div class="control-row download-row">
-                <button
-                  type="button"
-                  class="primary"
-                  disabled={busy()}
-                  onClick={() => void onDownloadSingle()}
-                >
-                  Download
-                </button>
+        <Show when={mode() === 'single'}>
+          <div class="stage-canvas">
+            <canvas ref={canvasRef} class="preview-canvas" />
+          </div>
+        </Show>
+
+        <Show when={mode() === 'batch'}>
+          <div class="stage-batch">
+            <ul class="batch-list">
+              <For each={batchRows()}>
+                {(row) => (
+                  <li classList={{ row: true, [row.status]: true }}>
+                    <span class="batch-name">{row.name}</span>
+                    <span class="batch-status">{row.status}</span>
+                    <span class="batch-meta">{row.message ?? ''}</span>
+                    <Show when={row.status === 'done'}>
+                      <button type="button" class="ghost" onClick={() => onDownloadRow(row)}>
+                        Save
+                      </button>
+                    </Show>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </div>
+        </Show>
+      </main>
+
+      <Show when={mode() !== 'empty'}>
+        <aside class="sidebar">
+          <ControlsCommon
+            preset={preset()}
+            onPreset={applyPreset}
+            quality={quality()}
+            onQuality={setQuality}
+            resize={resize()}
+            onResize={setResize}
+            resizePx={resizePx()}
+            onResizePx={setResizePx}
+            theme={theme()}
+            onTheme={setTheme}
+            layout={layout()}
+            onLayout={setLayout}
+            showMeta={showMeta()}
+            onShowMeta={setShowMeta}
+          />
+
+          <Show when={mode() === 'single'}>
+            <div class="meter">
+              <div class="meter-row">
+                <span class="meter-label">Estimated size</span>
+                <span class="meter-value">{formatBytes(previewSize())}</span>
+              </div>
+              <div class="meter-row">
+                <span class="meter-label">Render</span>
+                <span class="meter-value">{formatMs(previewElapsedMs())}</span>
               </div>
             </div>
-            <p class="status">{status()}</p>
-          </section>
-        )}
-      </Show>
+            <button
+              type="button"
+              class="primary"
+              disabled={busy()}
+              onClick={() => void onDownloadSingle()}
+            >
+              {busy() ? 'Saving…' : 'Download'}
+            </button>
+          </Show>
 
-      <Show when={isBatch()}>
-        <section id="batch">
-          <div class="controls">
-            <ControlsCommon
-              preset={preset()}
-              onPreset={applyPreset}
-              quality={quality()}
-              onQuality={setQuality}
-              resize={resize()}
-              onResize={setResize}
-              resizePx={resizePx()}
-              onResizePx={setResizePx}
-              theme={theme()}
-              onTheme={setTheme}
-              layout={layout()}
-              onLayout={setLayout}
-              showMeta={showMeta()}
-              onShowMeta={setShowMeta}
-            />
-            <div class="control-row download-row">
-              <button
-                type="button"
-                class="primary"
-                disabled={batchBusy()}
-                onClick={onProcessBatch}
-              >
-                {batchBusy() ? 'Processing…' : `Process ${batchRows().length} files`}
-              </button>
-            </div>
-          </div>
-          <ul class="batch-list">
-            <For each={batchRows()}>
-              {(row) => (
-                <li classList={{ row: true, [row.status]: true }}>
-                  <span class="batch-name">{row.name}</span>
-                  <span class="batch-status">{row.status}</span>
-                  <span class="batch-meta">{row.message ?? ''}</span>
-                  <Show when={row.status === 'done'}>
-                    <button type="button" onClick={() => onDownloadRow(row)}>
-                      Download
-                    </button>
-                  </Show>
-                </li>
-              )}
-            </For>
-          </ul>
-          <p class="status">{status()}</p>
-        </section>
-      </Show>
+          <Show when={mode() === 'batch'}>
+            <button type="button" class="primary" disabled={batchBusy()} onClick={onProcessBatch}>
+              {batchBusy() ? 'Processing…' : `Process ${batchRows().length} files`}
+            </button>
+          </Show>
 
-      <footer>
-        Source on <a href="https://github.com/P4suta/photo-frame">GitHub</a> · Bundled font:{' '}
-        <a href="https://github.com/vercel/geist-font">Geist Sans</a> by Vercel × basement.studio (
-        <a href="fonts/Geist/OFL.txt">OFL 1.1</a>)
-      </footer>
-    </main>
+          <footer class="sidebar-footer">
+            <a href="https://github.com/P4suta/photo-frame">Source</a> ·{' '}
+            <a href="https://github.com/vercel/geist-font">Geist Sans</a> (
+            <a href="fonts/Geist/OFL.txt">OFL 1.1</a>)
+          </footer>
+        </aside>
+      </Show>
+    </div>
   );
 };
 
@@ -356,125 +450,119 @@ type ControlsProps = {
   onShowMeta: (v: boolean) => void;
 };
 
-/**
- * Shared control panel between the single-preview and batch modes.
- * Lifting it out keeps the JSX tree readable and ensures the two
- * surfaces stay visually identical.
- */
 const ControlsCommon = (props: ControlsProps) => (
-  <>
-    <div class="control-row">
-      <span class="control-label">Preset</span>
-      <div class="segmented" role="radiogroup" aria-label="Quality preset">
-        <For each={Object.entries(PRESETS) as [PresetKey, (typeof PRESETS)[PresetKey]][]}>
-          {([key, info]) => (
-            <>
-              {/* biome-ignore lint/a11y/useSemanticElements: segmented-button radiogroup keeps custom styling; replacing with <input type=radio> would lose the styled-button visuals. */}
-              <button
-                type="button"
-                role="radio"
-                aria-checked={props.preset === key}
-                classList={{ active: props.preset === key }}
-                onClick={() => props.onPreset(key)}
-              >
-                {info.label}
-              </button>
-            </>
-          )}
-        </For>
-      </div>
-    </div>
-
-    <label class="control-row">
-      <span class="control-label">Quality</span>
-      <input
-        type="range"
-        min={1}
-        max={100}
-        value={props.quality}
-        onInput={(event) => props.onQuality(Number(event.currentTarget.value))}
+  <div class="controls">
+    <Field label="Preset">
+      <Segmented
+        options={Object.entries(PRESETS).map(([key, info]) => ({
+          value: key as PresetKey,
+          label: info.label,
+        }))}
+        value={props.preset}
+        onChange={props.onPreset}
+        ariaLabel="Quality preset"
       />
-      <output>{props.quality}</output>
-    </label>
+    </Field>
 
-    <div class="control-row">
-      <label class="control-label">
+    <Field label="Quality">
+      <div class="slider-row">
         <input
-          type="checkbox"
-          checked={props.resize}
-          onChange={(event) => props.onResize(event.currentTarget.checked)}
+          type="range"
+          min={1}
+          max={100}
+          value={props.quality}
+          onInput={(event) => props.onQuality(Number(event.currentTarget.value))}
         />
-        Resize long edge to
-      </label>
-      <input
-        type="number"
-        min={1}
-        max={20000}
-        step={1}
-        value={props.resizePx}
-        disabled={!props.resize}
-        onInput={(event) => props.onResizePx(Number(event.currentTarget.value) || 1)}
+        <output class="slider-value">{props.quality}</output>
+      </div>
+    </Field>
+
+    <Field label="Long edge">
+      <div class="resize-row">
+        <label class="check-inline">
+          <input
+            type="checkbox"
+            checked={props.resize}
+            onChange={(event) => props.onResize(event.currentTarget.checked)}
+          />
+          <span>Cap at</span>
+        </label>
+        <input
+          type="number"
+          min={1}
+          max={20000}
+          step={1}
+          value={props.resizePx}
+          disabled={!props.resize}
+          onInput={(event) => props.onResizePx(Number(event.currentTarget.value) || 1)}
+        />
+        <span class="suffix">px</span>
+      </div>
+    </Field>
+
+    <Field label="Theme">
+      <Segmented
+        options={THEMES.map((t) => ({ value: t.value, label: t.label, title: t.description }))}
+        value={props.theme}
+        onChange={props.onTheme}
+        ariaLabel="Frame theme"
       />
-      <span class="control-suffix">px</span>
-    </div>
+    </Field>
 
-    <div class="control-row">
-      <span class="control-label">Theme</span>
-      <div class="segmented" role="radiogroup" aria-label="Frame theme">
-        <For each={THEMES}>
-          {(t) => (
-            <>
-              {/* biome-ignore lint/a11y/useSemanticElements: matches the Preset segmented control above; keeps a single visual idiom for grouped option pickers. */}
-              <button
-                type="button"
-                role="radio"
-                aria-checked={props.theme === t.value}
-                title={t.description}
-                classList={{ active: props.theme === t.value }}
-                onClick={() => props.onTheme(t.value)}
-              >
-                {t.label}
-              </button>
-            </>
-          )}
-        </For>
-      </div>
-    </div>
+    <Field label="Layout">
+      <Segmented
+        options={LAYOUTS.map((l) => ({ value: l.value, label: l.label, title: l.description }))}
+        value={props.layout}
+        onChange={props.onLayout}
+        ariaLabel="Caption layout"
+      />
+    </Field>
 
-    <div class="control-row">
-      <span class="control-label">Layout</span>
-      <div class="segmented" role="radiogroup" aria-label="Caption layout">
-        <For each={LAYOUTS}>
-          {(l) => (
-            <>
-              {/* biome-ignore lint/a11y/useSemanticElements: matches the Theme segmented control above. */}
-              <button
-                type="button"
-                role="radio"
-                aria-checked={props.layout === l.value}
-                title={l.description}
-                classList={{ active: props.layout === l.value }}
-                onClick={() => props.onLayout(l.value)}
-              >
-                {l.label}
-              </button>
-            </>
-          )}
-        </For>
-      </div>
-    </div>
-
-    <label class="control-row">
-      <span class="control-label">
+    <Field label="Metadata">
+      <label class="check-inline">
         <input
           type="checkbox"
           checked={props.showMeta}
           onChange={(event) => props.onShowMeta(event.currentTarget.checked)}
         />
-        Show metadata
-      </span>
-    </label>
-  </>
+        <span>Show below frame</span>
+      </label>
+    </Field>
+  </div>
+);
+
+const Field = (props: { label: string; children: unknown }) => (
+  <div class="field">
+    <div class="field-label">{props.label}</div>
+    <div class="field-body">{props.children as never}</div>
+  </div>
+);
+
+type SegmentedOption<T extends string> = { value: T; label: string; title?: string };
+
+const Segmented = <T extends string>(props: {
+  options: SegmentedOption<T>[];
+  value: T;
+  onChange: (v: T) => void;
+  ariaLabel: string;
+}) => (
+  <div class="segmented" role="radiogroup" aria-label={props.ariaLabel}>
+    <For each={props.options}>
+      {(opt) => (
+        // biome-ignore lint/a11y/useSemanticElements: segmented buttons keep custom styling; native radios would lose the cohesive look used across the sidebar.
+        <button
+          type="button"
+          role="radio"
+          aria-checked={props.value === opt.value}
+          title={opt.title}
+          classList={{ active: props.value === opt.value }}
+          onClick={() => props.onChange(opt.value)}
+        >
+          {opt.label}
+        </button>
+      )}
+    </For>
+  </div>
 );
 
 function framedName(original: string): string {
@@ -503,4 +591,15 @@ function uint8ToBuffer(u8: Uint8Array): ArrayBuffer {
 function stringifyError(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+function formatBytes(n: number | null): string {
+  if (n === null) return '—';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function formatMs(n: number | null): string {
+  return n === null ? '—' : `${n} ms`;
 }
