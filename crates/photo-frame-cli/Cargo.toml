@@ -12,8 +12,12 @@ authors.workspace      = true
 name = "photo-frame"
 path = "src/main.rs"
 
+[features]
+default = []
+heif = ["photo-frame/heif"]
+
 [dependencies]
-photo-frame-core   = { path = "../photo-frame-core" }
+photo-frame        = { workspace = true }
 clap               = { workspace = true }
 anyhow             = { workspace = true }
 tracing            = { workspace = true }

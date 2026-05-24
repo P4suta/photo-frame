@@ -1,0 +1,30 @@
+[package]
+name        = "photo-frame-decode"
+description = "Decode arbitrary input formats into a canonical Photograph."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+# Adds HEIC / HEIF input support via libheif-rs. Requires a system libheif
+# install at build- and run-time. Opt-in because this is the only path that
+# breaks the Pure Rust contract; see deny.toml's skip-tree exemption.
+heif = ["dep:libheif-rs"]
+
+[dependencies]
+photo-frame-types = { workspace = true }
+image             = { workspace = true }
+kamadak-exif      = { workspace = true }
+thiserror         = { workspace = true }
+tracing           = { workspace = true }
+libheif-rs        = { version = "1", optional = true }
+
+[lints]
+workspace = true

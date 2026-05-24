@@ -1,0 +1,28 @@
+[package]
+name        = "photo-frame"
+description = "Liit-style golden-ratio photo framing — facade re-exporting the decode/frame/encode pipeline."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+# Forwards to photo-frame-decode/heif. Opt-in C-dep path for HEIC input.
+heif = ["photo-frame-decode/heif"]
+
+[dependencies]
+photo-frame-types  = { workspace = true }
+photo-frame-decode = { workspace = true }
+photo-frame-frame  = { workspace = true }
+photo-frame-encode = { workspace = true }
+thiserror          = { workspace = true }
+tracing            = { workspace = true }
+
+[lints]
+workspace = true

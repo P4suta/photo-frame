@@ -13,7 +13,7 @@ crate-type = ["cdylib", "rlib"]
 path       = "src/lib.rs"
 
 [dependencies]
-photo-frame-core         = { path = "../photo-frame-core" }
+photo-frame              = { workspace = true }
 wasm-bindgen             = "0.2"
 serde                    = { version = "1", features = ["derive"] }
 serde-wasm-bindgen       = "0.6"

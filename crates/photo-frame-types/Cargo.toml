@@ -1,0 +1,18 @@
+[package]
+name        = "photo-frame-types"
+description = "Canonical data types shared across the photo-frame pipeline."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
