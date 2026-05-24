@@ -48,6 +48,17 @@ fn strip_heif_exif_prefix(blob: &[u8]) -> Option<&[u8]> {
 fn copy_rgba_with_stride(data: &[u8], stride: usize, width: u32, height: u32) -> Vec<u8> {
     let row_bytes = rgba_row_len(width);
     let total = row_bytes * (height as usize);
+
+    #[cfg(feature = "heif")]
+    if stride > row_bytes {
+        tracing::debug!(
+            event_id = "decode.heif.stride_padding",
+            stride,
+            packed_row = row_bytes,
+            "libheif plane has alignment padding; repacking row-by-row"
+        );
+    }
+
     let mut out = Vec::with_capacity(total);
     for y in 0..(height as usize) {
         let start = y * stride;
@@ -56,6 +67,13 @@ fn copy_rgba_with_stride(data: &[u8], stride: usize, width: u32, height: u32) ->
         // stride×height (corrupt libheif output), stop early — the caller
         // will get a DataSizeMismatch from `Pixels::from_rgba8`.
         if end > data.len() {
+            #[cfg(feature = "heif")]
+            tracing::warn!(
+                event_id = "decode.heif.truncated",
+                expected_rows = height,
+                got_rows = y,
+                "libheif plane data shorter than declared stride*height; truncating"
+            );
             break;
         }
         out.extend_from_slice(&data[start..end]);

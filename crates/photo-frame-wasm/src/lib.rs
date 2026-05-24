@@ -40,8 +40,22 @@ pub fn init() {
 /// deserialisation error if `options` cannot be parsed).
 #[wasm_bindgen]
 pub fn frame(bytes: &[u8], options: JsValue) -> Result<Vec<u8>, JsError> {
+    // wasm_bindgen rewrites the fn signature in ways that confuse
+    // `#[tracing::instrument]` (the JsValue param is gone by the time
+    // the macro sees it). Hand-roll the span so the same structured
+    // contract still holds.
+    let span = tracing::info_span!(
+        "wasm_frame",
+        input_bytes = bytes.len(),
+        output_bytes = tracing::field::Empty,
+    );
+    let _enter = span.enter();
     let opts: JsOptions = serde_wasm_bindgen::from_value(options).map_err(|e| {
-        error!(error = %e, "failed to parse JS options");
+        error!(
+            event_id = "wasm.frame.options_invalid",
+            error = %e,
+            "failed to parse JS options"
+        );
         JsError::new(&format!("invalid options: {e}"))
     })?;
     let pipeline_opts = PipelineOptions {
@@ -58,7 +72,11 @@ pub fn frame(bytes: &[u8], options: JsValue) -> Result<Vec<u8>, JsError> {
             quality: opts.jpeg_quality,
         },
     };
-    pipeline(bytes, &pipeline_opts).map_err(|e| JsError::new(&display_chain(&e)))
+    let result = pipeline(bytes, &pipeline_opts).map_err(|e| JsError::new(&display_chain(&e)));
+    if let Ok(out) = &result {
+        tracing::Span::current().record("output_bytes", out.len());
+    }
+    result
 }
 
 /// Render `err` as a single string carrying the full cause chain, mirroring

@@ -14,6 +14,10 @@ pub(crate) fn camera(exif: &Exif) -> Option<Camera> {
     let make = ascii(exif, Tag::Make);
     let model = ascii(exif, Tag::Model);
     if make.is_none() && model.is_none() {
+        tracing::debug!(
+            event_id = "decode.exif.camera.absent",
+            "neither Make nor Model EXIF tag present; camera = None"
+        );
         return None;
     }
     Some(Camera { make, model })
@@ -23,6 +27,10 @@ pub(crate) fn lens(exif: &Exif) -> Option<Lens> {
     let make = ascii(exif, Tag::LensMake);
     let model = ascii(exif, Tag::LensModel);
     if make.is_none() && model.is_none() {
+        tracing::debug!(
+            event_id = "decode.exif.lens.absent",
+            "neither LensMake nor LensModel EXIF tag present; lens = None"
+        );
         return None;
     }
     Some(Lens { make, model })

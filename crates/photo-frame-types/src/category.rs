@@ -97,7 +97,10 @@ mod tests {
             Category::Encode,
             Category::Internal,
         ] {
-            assert!(cat.exit_code() > 0, "category {cat:?} has invalid exit code");
+            assert!(
+                cat.exit_code() > 0,
+                "category {cat:?} has invalid exit code"
+            );
         }
     }
 
@@ -111,7 +114,11 @@ mod tests {
             Category::Internal,
         ] {
             let label = cat.label();
-            assert_eq!(label, label.to_lowercase(), "label must be lowercase: {label}");
+            assert_eq!(
+                label,
+                label.to_lowercase(),
+                "label must be lowercase: {label}"
+            );
             assert!(!label.is_empty(), "label must be non-empty");
         }
     }
