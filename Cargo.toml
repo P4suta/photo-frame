@@ -46,6 +46,32 @@ codegen-units = 1
 opt-level     = 3
 strip         = "symbols"
 
+# Phase 1.2 tuning.
+#
+# `cargo test` time was dominated by a single test — `photo-frame::pipeline::
+# tests::sns_preset_caps_output_dimensions` — at ~15 s. It synthesises a
+# 4000×3000 JPEG and drives the full decode → frame → encode pipeline,
+# where image / kamadak-exif / imageproc spend almost all of that time in
+# loops that benefit from any real optimisation level.
+#
+# `opt-level = 1` on the test profile gets ~10x speedup on that test without
+# meaningfully changing compile time (we re-measured both with
+# scripts/bench-build.sh).
+#
+# `package."*".opt-level = 3` keeps dependency crates fully optimised even
+# in the dev/test profile. The dependency graph is large and immutable
+# from the project's perspective; compiling these crates at -O3 once and
+# caching the result yields a much faster inner loop than the cargo default
+# of recompiling at -O0 on every `cargo test`.
+[profile.test]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.test.package."*"]
+opt-level = 3
+
 [workspace.lints.rust]
 unsafe_code                   = "forbid"
 missing_debug_implementations = "warn"

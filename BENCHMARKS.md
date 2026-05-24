@@ -85,6 +85,7 @@ medians and the delta (negative = faster, positive = regression).
 | Phase | Snapshot | Host `cargo build` warm | Host `cargo test` | Host `clippy` | Container `just ci` | Docker cold rebuild | Notes |
 | ----- | -------- | ----------------------: | ----------------: | ------------: | ------------------: | ------------------: | ----- |
 | baseline | `8974cc6` | 0.08 s | 14.73 s | 0.10 s | 18.45 s | 1.00 s\* | \*warm rebuild; cold not measured (cache invalidation cost) |
+| Phase 1.2 (profiles) | post-1.2 | 0.08 s | **1.15 s** | 0.10 s | _re-measure_ | — | **-92% on test** — `package."*"` at -O3 on dev+test profile |
 
 ## Negative results (changes investigated but not shipped)
 
