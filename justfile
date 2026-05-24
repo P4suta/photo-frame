@@ -8,7 +8,7 @@ _default:
 # ── Composite ────────────────────────────────────────────────────────────────
 
 # Run the full CI suite locally (mirrors .github/workflows/ci.yml).
-ci: fmt-check lint test wasm-build
+ci: fmt-check lint test wasm-build web-build
 
 # Install lefthook git hooks (run once after clone).
 hooks:
@@ -57,6 +57,13 @@ test:
 
 wasm-build:
     cd crates/photo-frame-wasm && wasm-pack build --target web --release --out-dir www/pkg
+
+# Build the Vite/SolidJS web bundle on top of the WASM artefact. Mirrors what
+# `.github/workflows/pages.yml` runs on push to main, so `just ci` catches
+# TypeScript or Vite regressions locally instead of letting Pages discover
+# them after the merge.
+web-build: wasm-build
+    cd crates/photo-frame-wasm/www && bun install --frozen-lockfile && bun run build
 
 wasm-dev: wasm-build
     cd crates/photo-frame-wasm/www && bun install && bun run dev -- --host 0.0.0.0

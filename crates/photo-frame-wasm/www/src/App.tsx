@@ -134,15 +134,18 @@ export const App = () => {
                 <div class="segmented" role="radiogroup" aria-label="Quality preset">
                   <For each={Object.entries(PRESETS) as [PresetKey, (typeof PRESETS)[PresetKey]][]}>
                     {([key, info]) => (
-                      <button
-                        type="button"
-                        role="radio"
-                        aria-checked={preset() === key}
-                        classList={{ active: preset() === key }}
-                        onClick={() => applyPreset(key)}
-                      >
-                        {info.label}
-                      </button>
+                      <>
+                        {/* biome-ignore lint/a11y/useSemanticElements: segmented-button radiogroup keeps custom styling; replacing with <input type=radio> would lose the styled-button visuals. */}
+                        <button
+                          type="button"
+                          role="radio"
+                          aria-checked={preset() === key}
+                          classList={{ active: preset() === key }}
+                          onClick={() => applyPreset(key)}
+                        >
+                          {info.label}
+                        </button>
+                      </>
                     )}
                   </For>
                 </div>
