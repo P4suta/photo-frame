@@ -206,7 +206,11 @@ impl Categorize for CliIoError {
 fn main() -> ExitCode {
     install_panic_hook();
     let cli = Cli::parse();
-    init_tracing(cli.verbose, cli.quiet, cli.log_format.unwrap_or(LogFormat::Pretty));
+    init_tracing(
+        cli.verbose,
+        cli.quiet,
+        cli.log_format.unwrap_or(LogFormat::Pretty),
+    );
 
     match run(&cli) {
         Ok(code) => code,
@@ -677,8 +681,7 @@ mod tests {
 
     #[test]
     fn theme_ink_flag_flips_preset() {
-        let cli =
-            Cli::try_parse_from(["photo-frame", "--theme", "ink", "photo.jpg"]).unwrap();
+        let cli = Cli::try_parse_from(["photo-frame", "--theme", "ink", "photo.jpg"]).unwrap();
         let opts = build_options(&cli);
         assert_eq!(opts.frame.theme, FrameTheme::Ink);
     }
@@ -692,8 +695,8 @@ mod tests {
 
     #[test]
     fn layout_centered_flag_flips_preset() {
-        let cli = Cli::try_parse_from(["photo-frame", "--layout", "centered", "photo.jpg"])
-            .unwrap();
+        let cli =
+            Cli::try_parse_from(["photo-frame", "--layout", "centered", "photo.jpg"]).unwrap();
         let opts = build_options(&cli);
         assert_eq!(opts.frame.layout, CaptionLayout::Centered);
     }

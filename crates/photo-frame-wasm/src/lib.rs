@@ -111,7 +111,11 @@ pub fn frame_batch(items: &Array, options: JsValue) -> Result<Array, JsError> {
             Err(err) => {
                 failed += 1;
                 set_or_throw(&item_obj, "ok", &JsValue::FALSE)?;
-                set_or_throw(&item_obj, "result", &JsValue::from_str(&display_chain(&err)))?;
+                set_or_throw(
+                    &item_obj,
+                    "result",
+                    &JsValue::from_str(&display_chain(&err)),
+                )?;
             },
         }
         results.push(&item_obj);
