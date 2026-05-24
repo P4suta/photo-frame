@@ -99,8 +99,12 @@ fn compose_canvas(
     if let Some(ml) = layout.meta.as_ref() {
         let renderer = Renderer::new(opts.theme.ink());
         match opts.layout {
-            CaptionLayout::Edges => draw_caption_edges(&mut canvas, &renderer, ml, caption, canvas_w),
-            CaptionLayout::Centered => draw_caption_centered(&mut canvas, &renderer, ml, caption, canvas_w),
+            CaptionLayout::Edges => {
+                draw_caption_edges(&mut canvas, &renderer, ml, caption, canvas_w);
+            },
+            CaptionLayout::Centered => {
+                draw_caption_centered(&mut canvas, &renderer, ml, caption, canvas_w);
+            },
         }
     }
 

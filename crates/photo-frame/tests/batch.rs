@@ -19,8 +19,7 @@ fn tiny_jpeg(w: u32, h: u32) -> Vec<u8> {
 #[test]
 fn batch_one_is_reachable_from_facade_root() {
     let bytes = tiny_jpeg(48, 32);
-    let outcome: BatchOutcome<&str> =
-        batch_one("hero.jpg", &bytes, &PipelineOptions::default());
+    let outcome: BatchOutcome<&str> = batch_one("hero.jpg", &bytes, &PipelineOptions::default());
     assert_eq!(outcome.key, "hero.jpg");
     assert!(outcome.is_ok());
 }

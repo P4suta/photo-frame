@@ -61,7 +61,15 @@ impl Renderer {
         }
         let font = self.font_for(weight);
         let scale = PxScale::from(font_height);
-        draw_text_mut(canvas, self.ink, to_i32(x), to_i32(top_y), scale, font, text);
+        draw_text_mut(
+            canvas,
+            self.ink,
+            to_i32(x),
+            to_i32(top_y),
+            scale,
+            font,
+            text,
+        );
     }
 
     /// Draw `text` right-aligned so that its right edge lands at

@@ -158,7 +158,11 @@ fn cli_batch_3_inputs_all_succeed() {
         .expect("readdir")
         .filter_map(|e| e.ok().map(|e| e.path()))
         .collect();
-    assert_eq!(produced.len(), 3, "expected three framed outputs in {out_dir:?}");
+    assert_eq!(
+        produced.len(),
+        3,
+        "expected three framed outputs in {out_dir:?}"
+    );
 }
 
 #[test]
