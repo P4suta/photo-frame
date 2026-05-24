@@ -31,6 +31,10 @@ libheif-rs        = { version = "1", optional = true }
 # Captures `tracing` events during tests so we can pin warn/debug messages
 # as part of the observability contract.
 tracing-test = { version = "0.2", default-features = false }
+# proptest drives the random-input fuzz tests under `tests/proptest_*.rs`.
+# Aim: every public decode entry point returns `Ok(Photograph)` or a
+# typed `DecodeError`, never panics, for any byte slice or EXIF blob.
+proptest     = "1"
 
 [lints]
 workspace = true
