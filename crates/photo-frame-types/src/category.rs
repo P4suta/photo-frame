@@ -38,6 +38,12 @@ pub enum Category {
     /// directly act on. Should be rare and always actionable for
     /// the project's maintainers.
     Internal,
+    /// One or more items in a batch failed, but the run did not stop.
+    /// Only the CLI raises this — single-item callers see the
+    /// per-item category directly. Distinguishing it from `Internal`
+    /// lets shell scripts react to "some output is missing" without
+    /// guessing.
+    PartialFailure,
 }
 
 impl Category {
@@ -51,6 +57,7 @@ impl Category {
             Self::Decode => 3,
             Self::Render => 4,
             Self::Encode => 5,
+            Self::PartialFailure => 6,
             Self::Internal => 1,
         }
     }
@@ -63,6 +70,7 @@ impl Category {
             Self::Decode => "decode",
             Self::Render => "render",
             Self::Encode => "encode",
+            Self::PartialFailure => "partial_failure",
             Self::Internal => "internal",
         }
     }
@@ -95,6 +103,7 @@ mod tests {
             Category::Decode,
             Category::Render,
             Category::Encode,
+            Category::PartialFailure,
             Category::Internal,
         ] {
             assert!(
@@ -105,12 +114,20 @@ mod tests {
     }
 
     #[test]
+    fn partial_failure_exit_code_is_six() {
+        // The CLI's exit-code contract. Renumbering would break shell
+        // scripts that key on this; wedge it here.
+        assert_eq!(Category::PartialFailure.exit_code(), 6);
+    }
+
+    #[test]
     fn labels_are_lowercase_words() {
         for cat in [
             Category::Input,
             Category::Decode,
             Category::Render,
             Category::Encode,
+            Category::PartialFailure,
             Category::Internal,
         ] {
             let label = cat.label();
