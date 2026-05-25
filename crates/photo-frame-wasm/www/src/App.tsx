@@ -57,6 +57,7 @@ import {
   pickAutoDemoteKey,
   sourceLongEdgeOf,
 } from './lib/long-edge';
+import { createVariantCache, type VariantCache } from './lib/variant-cache';
 import { ALL_VARIANTS, type VariantKey, variantKey } from './lib/variants';
 
 // The preview pipeline no longer caps the long edge below the
@@ -116,12 +117,17 @@ type Mode = 'empty' | 'single' | 'batch';
 
 export const App = () => {
   const [single, setSingle] = createSignal<DroppedFile | null>(null);
-  // Phase G2 — keyed by `VariantKey`; entries are populated by the
-  // prepare-then-prefetch effect. `previewPixels` below is the
-  // derived "what to draw right now" memo.
-  const [previewVariants, setPreviewVariants] = createSignal<Map<VariantKey, PreparedPixels>>(
-    new Map(),
-  );
+  // Phase H — two-layer variant cache backing the preview. Entries
+  // are populated by the prepare-then-prefetch effect; on a scope
+  // change (image swap or Resolution / Preset bump) the cache
+  // `rotate()`s instead of wiping, so the canvas keeps showing the
+  // stale-but-correctly-shaped variant until the new prepare lands
+  // and `set()` writes the fresh one. Without rotation the user
+  // sees a 50–700 ms blank between scope changes — see
+  // `lib/variant-cache.ts` for the full rationale.
+  const [previewVariants, setPreviewVariants] = createSignal<
+    VariantCache<VariantKey, PreparedPixels>
+  >(createVariantCache<VariantKey, PreparedPixels>());
   const [batchRows, setBatchRows] = createSignal<BatchRow[]>([]);
   const [batchFiles, setBatchFiles] = createSignal<DroppedFile[] | null>(null);
   const [preset, setPreset] = createSignal<PresetKey>('standard');
@@ -179,6 +185,19 @@ export const App = () => {
     () => previewVariants().get(currentVariantKey()) ?? null,
   );
 
+  // The reactive write helpers below funnel every cache mutation
+  // through the signal so the `previewPixels` memo (and anything
+  // else that reads `previewVariants()`) re-evaluates atomically.
+  const cacheSet = (key: VariantKey, pixels: PreparedPixels): void => {
+    setPreviewVariants((c) => c.set(key, pixels));
+  };
+  const cacheRotate = (): void => {
+    setPreviewVariants((c) => c.rotate());
+  };
+  const cacheClear = (): void => {
+    setPreviewVariants((c) => c.clear());
+  };
+
   const buildPipelineOptions = (maxLongEdge: number | null): PipelineOptions => ({
     ...buildFrameOptions(maxLongEdge),
     jpeg_quality: quality(),
@@ -189,7 +208,11 @@ export const App = () => {
   // and `resetToEmpty` (called by the brand wordmark link).
   const clearSession = (): void => {
     revokeAllBatchUrls();
-    setPreviewVariants(new Map());
+    // Full session reset — wipe both cache layers. The previous
+    // layer would otherwise briefly resurface the prior image
+    // when the next scope effect rotated this (just-cleared)
+    // current onto it; `clear()` zeros both at once.
+    cacheClear();
     setStatus('');
     setSingle(null);
     setBatchFiles(null);
@@ -258,7 +281,13 @@ export const App = () => {
       (scope) => {
         if (!scope) return;
         const gen = prepareGate.bump();
-        setPreviewVariants(new Map());
+        // Phase H — rotate (not wipe): the just-current variants
+        // sink to the `previous` layer so `previewPixels()` keeps
+        // returning them while the new scope's prepare flight is
+        // in the air. The user sees no blank window — the stale
+        // (correct shape, wrong pixel cap) preview holds the
+        // canvas until the fresh prepare lands.
+        cacheRotate();
         const maxLongEdge = scope.maxLongEdge;
         // Snapshot the user-visible variant at scope-change time —
         // we prepare this one first so the canvas updates ASAP.
@@ -285,7 +314,10 @@ export const App = () => {
       (key) => {
         const current = single();
         if (!current) return;
-        if (previewVariants().has(key)) return; // already cached
+        // `hasFresh` — only the *current* layer counts as cached.
+        // A previous-layer entry is stale (wrong scope) and must
+        // be re-prepared even though `has(key)` would return true.
+        if (previewVariants().hasFresh(key)) return;
         const maxLongEdge = effectiveMaxLongEdge();
         const opts: FrameOptionsForPrepare = {
           theme: theme(),
@@ -309,11 +341,7 @@ export const App = () => {
     try {
       const pixels = await preparePixels(current.data, opts);
       if (!prepareGate.isCurrent(gen) || single() !== current) return;
-      setPreviewVariants((m) => {
-        const next = new Map(m);
-        next.set(key, pixels);
-        return next;
-      });
+      cacheSet(key, pixels);
       setStatus('');
     } catch (error) {
       if (prepareGate.isCurrent(gen)) setStatus(`Error: ${stringifyError(error)}`);
@@ -342,7 +370,10 @@ export const App = () => {
     for (const v of ALL_VARIANTS) {
       if (!prepareGate.isCurrent(gen)) return;
       const key = variantKey(v.theme, v.layout, v.showMeta);
-      if (previewVariants().has(key)) continue;
+      // `hasFresh` — only the *current* layer counts as cached
+      // for the prefetch loop. Stale `previous` entries must be
+      // re-prepared under the new scope.
+      if (previewVariants().hasFresh(key)) continue;
       const opts: FrameOptionsForPrepare = {
         theme: v.theme,
         layout: v.layout,
@@ -352,11 +383,7 @@ export const App = () => {
       try {
         const pixels = await preparePixels(current.data, opts);
         if (!prepareGate.isCurrent(gen)) return;
-        setPreviewVariants((m) => {
-          const next = new Map(m);
-          next.set(key, pixels);
-          return next;
-        });
+        cacheSet(key, pixels);
       } catch {
         // Prefetch best-effort — silently skip failed variants so a
         // glitch on one combo doesn't poison the UI status line.
