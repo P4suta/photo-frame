@@ -126,21 +126,27 @@ const segmentedButton = defineRecipe({
 const dropZone = defineRecipe({
   className: 'dropZone',
   base: {
-    // Drop zone caps at `phi.7` (≈ 29rem ≈ 464px) so it stays
-    // approachable on ultra-wide screens; `min(…, 100%)` collapses
-    // gracefully when the viewport is narrower than that cap.
+    // The drop zone is *itself* a golden rectangle: width capped
+    // at `phi.7` (≈ 464px), aspect-ratio φ — so the height
+    // settles at `phi.6` (≈ 287px). The shape is the affordance;
+    // the dashed border just outlines it.
     width: '[min({sizes.phi.7}, 100%)]',
-    maxHeight: 'full',
+    aspectRatio: '[1.618]',
     border: 'dashedStrong',
     borderRadius: '2',
     background: 'transparent',
     color: 'fg.dim',
-    paddingX: 'phi.1',
-    paddingY: 'phi.3',
+    // Padding ratio matches the outer aspect (φ:1), so the inner
+    // content box stays in the same proportion as the box itself.
+    paddingX: 'phi.0',
+    paddingY: 'phi.m1',
     font: 'inherit',
     fontSize: 'body',
     textAlign: 'center',
     cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
     transition: 'border-color 140ms ease, color 140ms ease, background 140ms ease',
     _hover: {
       borderColor: 'fg.default',
@@ -181,12 +187,18 @@ const appShell = defineRecipe({
     height: '[100dvh]',
     overflow: 'hidden',
     display: 'grid',
-    // grid-template-rows/columns/areas are bespoke layout strings —
-    // template syntax (`1fr`, area names) isn't a token namespace.
-    // Header height = `phi.2` (≈ 42px); sidebar width = `phi.6`
-    // (≈ 287px); their ratio is exactly φ⁴.
+    // Column ratio is the golden split itself: stage takes the
+    // larger φ-share, sidebar takes the smaller 1-share. `1.618fr
+    // 1fr` = 61.8% : 38.2% on any wide viewport. The sidebar gets
+    // a `min-width` so controls don't crush at narrow widths;
+    // below `smDown` (= 720px) the layout collapses to a single
+    // column anyway.
+    //
+    // Header height keeps `phi.2` (≈ 42px) — the row is sized to
+    // the natural height of its content (wordmark + buttons),
+    // and `phi.2` is the tightest φ-step that fits both.
     gridTemplateRows: '[{sizes.phi.2} 1fr]',
-    gridTemplateColumns: '[1fr {sizes.phi.6}]',
+    gridTemplateColumns: '[1.618fr minmax({sizes.phi.5}, 1fr)]',
     gridTemplateAreas: '[ "header header" "stage  sidebar" ]',
     smDown: {
       gridTemplateRows: '[{sizes.phi.2} 1fr auto]',

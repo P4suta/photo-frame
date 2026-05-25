@@ -15,11 +15,16 @@ import { css } from '../styled-system/css';
 
 // ─── Header ──────────────────────────────────────────────────────
 
+// Header is a 2-column grid split on the golden ratio: the
+// brand (wordmark + tagline) takes the φ-share on the left,
+// the status block takes the 1-share on the right. The split
+// is structural, not flex space-between — readers can predict
+// exactly how the bar will rebalance at any width.
 export const appHeader = css({
   gridArea: 'header',
-  display: 'flex',
+  display: 'grid',
+  gridTemplateColumns: '[1.618fr 1fr]',
   alignItems: 'center',
-  justifyContent: 'space-between',
   paddingX: 'phi.0',
   borderBottom: 'soft',
   background: 'bg.stage',
@@ -118,12 +123,36 @@ const stageInnerBase = css.raw({
 // positioned) anchors to this content box rather than the page.
 export const stageEmpty = css(stageInnerBase, { position: 'relative' });
 
-// Canvas variant must stretch its child (the <canvas>) so the
-// canvas can resolve `height: 100%` against a definite block.
-// Centering broke that resolution and the canvas snapped back to
-// its intrinsic 1720×1285, hiding the bottom EXIF strip below the
-// fold on common laptops — that's the bug Phase A repairs.
-export const stageCanvas = css(stageInnerBase, { placeItems: 'stretch' });
+// Canvas variant frames the preview as a golden rectangle —
+// the stage area carves out a φ:1 (1.618:1) region the canvas
+// lives in. The image inside is letterboxed via the contain-fit
+// paint pass in `paintPreview`, so portrait sources still
+// display intact, just bordered by the φ-shaped frame.
+//
+// `place-items: center` re-emerges here (vs. `stretch` before)
+// because the inner div with `aspect-ratio` needs the parent's
+// alignment to size correctly; `max-width / max-height: full`
+// keeps the frame inside the stage at any viewport size.
+export const stageCanvas = css(stageInnerBase, {
+  placeItems: 'center',
+});
+
+// The actual aspect-shaped frame the preview canvas sits in.
+// Used as a wrapper around `<canvas>` so the canvas can resolve
+// `width / height: 100%` against a definite block whose
+// proportions are themselves the golden ratio.
+export const previewFrame = css({
+  aspectRatio: '[1.618]',
+  maxWidth: 'full',
+  maxHeight: 'full',
+  width: 'full',
+  // `min(...)` ensures the frame never overflows the parent in
+  // either axis while still preferring the larger dimension.
+  height: '[auto]',
+  display: 'flex',
+  alignItems: 'stretch',
+  justifyContent: 'stretch',
+});
 
 // Batch variant stretches both axes for the full-width row list.
 export const stageBatch = css(stageInnerBase, {
@@ -156,7 +185,14 @@ export const previewCanvas = css({
 });
 
 // ─── Sidebar ─────────────────────────────────────────────────────
-
+//
+// Internal vertical rhythm follows the golden split: each child
+// section (controls / mode-specific block / footer) takes its
+// share via `flex` so the sidebar's three bands are visually in
+// the φ ratio rather than a sequence of fixed-height cushions.
+// The numeric scale on `gap` is a φ-token, but the *bands* are
+// proportional — that's the structural use of φ the rest of the
+// chrome was missing.
 export const sidebar = css({
   gridArea: 'sidebar',
   overflowY: 'auto',
@@ -191,10 +227,16 @@ export const sidebarFooter = css({
 
 // ─── Controls ────────────────────────────────────────────────────
 
+// `flex: '1.618 1 0'` claims the φ-share of the sidebar's
+// vertical space — paired with the meter block's `flex: 1 1 0`
+// (see `meter`) the two bands sit in a 1.618:1 (= φ:1) ratio,
+// with the footer pinned by its own `margin-top: auto`.
 export const controls = css({
   display: 'flex',
   flexDirection: 'column',
   gap: 'phi.0',
+  flex: '[1.618 1 0]',
+  minHeight: '0',
 });
 
 export const field = css({
@@ -262,7 +304,11 @@ export const checkInline = css({
 export const suffix = css({ color: 'fg.dim', fontSize: 'meta' });
 
 // ─── Meter (estimated size / render time strip) ─────────────────
-
+//
+// `flex: '1 1 0'` is the 1-share opposite of the controls'
+// 1.618-share — together they split the sidebar's flexible
+// space in φ:1 (61.8% controls, 38.2% meter), with the
+// footer parked at the bottom by its own `margin-top: auto`.
 export const meter = css({
   display: 'flex',
   flexDirection: 'column',
@@ -272,6 +318,8 @@ export const meter = css({
   background: 'transparent',
   border: 'soft',
   borderRadius: 'phi.m3',
+  flex: '[1 1 0]',
+  minHeight: '0',
 });
 
 export const meterRow = css({

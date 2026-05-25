@@ -23,6 +23,7 @@ import {
   meterRow,
   meterValue,
   previewCanvas,
+  previewFrame,
   resizeRow,
   segmented,
   sidebar,
@@ -722,7 +723,12 @@ export const App = () => {
 
         <Show when={mode() === 'single'}>
           <div class={stageCanvas}>
-            <canvas ref={canvasRef} class={previewCanvas} />
+            {/* φ:1 wrapper carves the preview into a golden
+                rectangle; the contain-fit in paintPreview lets
+                portrait / landscape sources letterbox inside. */}
+            <div class={previewFrame}>
+              <canvas ref={canvasRef} class={previewCanvas} />
+            </div>
           </div>
         </Show>
 

@@ -21,10 +21,16 @@ export const gallery = css({
   padding: 'phi.m1',
 });
 
-// Card — column-flex of thumbnail, name, footer (status / save).
+// Card — vertical grid of thumbnail and metadata-footer, split
+// in the golden ratio (thumb : footer = φ:1) so the card itself
+// is a 1:φ golden rectangle. The thumb is a 1:1 square inside
+// the larger φ-share; the footer takes the smaller 1-share.
+// Stacking grid rows in `1.618fr 1fr` keeps the proportion exact
+// at any column width.
 export const galleryCard = css({
-  display: 'flex',
-  flexDirection: 'column',
+  display: 'grid',
+  gridTemplateRows: '[1.618fr 1fr]',
+  aspectRatio: '[1 / 1.618]',
   gap: 'phi.m1',
   padding: 'phi.m1',
   background: 'transparent',
@@ -33,19 +39,20 @@ export const galleryCard = css({
   position: 'relative',
 });
 
-// Thumbnail square — every framed preview gets letterboxed into a
-// 1:1 box so cards line up regardless of source orientation. The
-// inner `<img>` fills the box with `object-fit: contain` so the
-// frame and its caption are never cropped.
+// Thumbnail — fills the φ-share row of the card (the upper
+// 1.618fr track). `object-fit: contain` on the image (see
+// galleryThumbImg) lets framed previews of either orientation
+// letterbox inside without distortion.
 export const galleryThumb = css({
-  aspectRatio: '[1]',
   width: 'full',
+  height: 'full',
   background: 'bg.stage',
   borderRadius: 'phi.m3',
   overflow: 'hidden',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
+  minHeight: '0',
 });
 
 export const galleryThumbImg = css({
