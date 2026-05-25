@@ -52,7 +52,16 @@ import {
 } from './frame-client';
 import { Gallery } from './Gallery';
 
-const PREVIEW_LONG_EDGE = 1600;
+// Preview-render long-edge cap. The previous 1600 was tuned to
+// the old φ-letterbox layout where a portrait source filled
+// less than half the canvas anyway; now that the canvas wrapper
+// adopts the source aspect and grows to the stage's full
+// short-side, the same source can paint into a much larger
+// drawing buffer (stage height × DPR can easily clear 2000 px).
+// 3200 keeps the source resolution one step ahead of the
+// drawing buffer at any reasonable display size — sharp on 2K
+// and 4K screens — without paying the full-resolution cost.
+const PREVIEW_LONG_EDGE = 3200;
 
 // `value` mirrors the Rust enum (`paper`/`ink`), `label` is the
 // UI face — direct colour names read more honestly than the
@@ -475,6 +484,12 @@ export const App = () => {
     // Author in CSS pixels — the DPR ride is on the transform so
     // the contain-fit maths below works in container units.
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // Browsers default `imageSmoothingQuality` to `low` (= cheap
+    // bilinear); `high` engages the proper Lanczos-class
+    // resampler so a 3200 px source scales down to a 1500 px
+    // canvas without the stippled-edge "jaggy" look.
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
     ctx.clearRect(0, 0, cssW, cssH);
 
     // Phase F3-lite — zero-copy view onto the cached RGBA bytes
