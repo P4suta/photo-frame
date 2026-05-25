@@ -184,9 +184,6 @@ export const chordStateAt = (
   return { phase: 'hidden', fraction: 0 };
 };
 
-/** A directed line segment used by the renderer. */
-export type Segment = { readonly start: Vec2; readonly end: Vec2 };
-
 /** Pure: the on-spiral sub-segment to render given a ChordState.
  *  Returns `null` for hidden chords. `flipShrinkDirection` flips
  *  the shrink anchor (V_a side instead of V_b side) — used for
@@ -196,7 +193,7 @@ export const chordSegment = (
   thetaA: number,
   state: ChordState,
   flipShrinkDirection = false,
-): Segment | null => {
+): { readonly start: Vec2; readonly end: Vec2 } | null => {
   if (state.phase === 'hidden') return null;
   const va = logSpiralPoint(thetaA);
   const vb = logSpiralPoint(thetaA + Math.PI / 2);
@@ -213,71 +210,6 @@ export const chordSegment = (
   }
   // Default: drop V_a side first → remaining slice stays on V_b.
   return { start: lerp(1 - state.fraction), end: vb };
-};
-
-// ─── Extension lines ─────────────────────────────────────────────
-//
-// Each nested rectangle has 4 sides; extending each side as a
-// straight line across the *outer* (frame-defining) rectangle
-// gives 4 chords through the outer rect that the inner rect's
-// sides lie on. Two of those four lines coincide with two of
-// the outer rect's own sides (whenever the inner rect shares
-// edges with the outer); the other two cut across the outer
-// interior. These cutting lines are the visual signature of the
-// φ-subdivision: they're what the eye reads as "the smaller
-// square is *constructed* by drawing this single line through
-// the bigger one".
-//
-// `extensionSegments` returns up to 4 segments (one per side of
-// the inner rect), each clipped to the outer rect. Sides that
-// fully coincide with an outer side are omitted (zero-length
-// after clipping is degenerate). The renderer animates these
-// segments in lockstep with the inner rect's spiral-vertex
-// crossing time, so each extension paints itself in as the
-// pencil passes the corresponding rectangle.
-
-/** Bounding box of a rectangle. The geometry guarantees
- *  axis-aligned rectangles, so min/max over the four corners
- *  suffices. */
-const bbox = (rect: Rectangle): { left: number; right: number; top: number; bottom: number } => {
-  let left = rect[0].x;
-  let right = rect[0].x;
-  let top = rect[0].y;
-  let bottom = rect[0].y;
-  for (const p of rect) {
-    if (p.x < left) left = p.x;
-    if (p.x > right) right = p.x;
-    if (p.y < top) top = p.y;
-    if (p.y > bottom) bottom = p.y;
-  }
-  return { left, right, top, bottom };
-};
-
-/** Pure: extensions of the four sides of `inner` clipped to
- *  `outer`. Sides that lie on an outer edge collapse to the
- *  outer edge itself and are returned as-is; sides that cut
- *  across the outer interior are extended both ways to the
- *  outer bounds. The returned list always has exactly 4
- *  segments, indexed: 0 = left, 1 = right, 2 = top, 3 = bottom.
- *  An index whose side coincides with an outer edge can be
- *  detected by `start === end` test on the extended portion;
- *  the renderer can choose to skip those.
- *
- *  Both rectangles must be axis-aligned (which the φ-nested
- *  family always is). */
-export const extensionSegments = (inner: Rectangle, outer: Rectangle): readonly Segment[] => {
-  const i = bbox(inner);
-  const o = bbox(outer);
-  return [
-    // 0: left side of inner extended vertically through outer
-    { start: { x: i.left, y: o.top }, end: { x: i.left, y: o.bottom } },
-    // 1: right side of inner extended vertically through outer
-    { start: { x: i.right, y: o.top }, end: { x: i.right, y: o.bottom } },
-    // 2: top side of inner extended horizontally through outer
-    { start: { x: o.left, y: i.top }, end: { x: o.right, y: i.top } },
-    // 3: bottom side of inner extended horizontally through outer
-    { start: { x: o.left, y: i.bottom }, end: { x: o.right, y: i.bottom } },
-  ];
 };
 
 // Internal helpers retained for the tests so the iteration's
