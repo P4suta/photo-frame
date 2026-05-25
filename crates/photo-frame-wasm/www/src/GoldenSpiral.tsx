@@ -1,6 +1,16 @@
 import { type JSX, onCleanup, onMount } from 'solid-js';
 import { css } from '../styled-system/css';
-import { goldenRectangles, K, logSpiralPoint, POLE, RHO0, type Vec2 } from './golden-spiral';
+import {
+  CHORD_VISIBLE_STEPS,
+  chordSegment,
+  chordStateAt,
+  goldenRectangles,
+  K,
+  logSpiralPoint,
+  POLE,
+  RHO0,
+  type Vec2,
+} from './golden-spiral';
 
 // Background decoration for the empty drop-zone state.
 //
@@ -33,10 +43,13 @@ import { goldenRectangles, K, logSpiralPoint, POLE, RHO0, type Vec2 } from './go
 const STEPS_OUT = 8;
 const STEPS_IN = 60;
 
-// Starting θ — the pencil enters from -2.8π so it has nearly
-// three turns of inward "drawing in" before the steady-state
-// loop kicks in at θ = 0.
-const TH0 = -2.8 * Math.PI;
+// Starting θ — the pencil enters from the pole as a sub-pixel
+// dot (at θ = -7π the radius is RHO0 · φ⁻¹⁴ ≈ RHO0 · 0.00086,
+// well below 1 px on any realistic canvas size) and grows out
+// of the centre over the first ~8 s before it becomes visibly
+// distinct, hitting the on-screen target radius at θ = 0
+// (≈ 31.5 s) where the steady-state self-similar loop begins.
+const TH0 = -7 * Math.PI;
 
 // One full outward turn (2π) takes ANGULAR_PERIOD_S seconds. 9 s
 // matches the reference HTML's tempo — fast enough that the
@@ -78,13 +91,21 @@ const PENCIL_INK_THRESHOLD_PX = 0.4; // inner stroke clip (anti-aliased
 // the vignette band.
 const RTARGET_RATIO = 0.42;
 
-// Reduced-motion static frame anchor — pick a θ a couple of
-// turns into the steady state so rectangles are populated and
-// the tip sits in a representative position.
-const STATIC_TH = TH0 + OMEGA * 6;
-
 const TWO_PI = Math.PI * 2;
 const HALF_PI = Math.PI / 2;
+
+// Reduced-motion static frame anchor — pick a θ a couple of
+// turns past the pencil-becomes-visible point so rectangles are
+// populated and the tip sits in a representative on-screen
+// position (steady-state, not the sub-pixel intro phase).
+const STATIC_TH = HALF_PI * 3;
+
+// Below this on-canvas chord length (px), a chord is treated as
+// "central" — the inward pole-region chords shrink toward the
+// outward direction (V_b side) instead of the usual V_a side,
+// so they feel like they're being absorbed by the outward
+// motion rather than peeling backward.
+const CHORD_CENTRAL_PX = 24;
 
 // Vertex ripple — every rectangle corner sits on the spiral at
 // θ = n·π/2, so a small ring rendered when the pencil tip
@@ -272,6 +293,40 @@ export const GoldenSpiral = (): JSX.Element => {
       }
       const pt = logSpiralPoint(thR);
       ctx.lineTo(mx(pt), my(pt));
+      ctx.stroke();
+
+      // Chords — connect each pair of consecutive spiral
+      // vertices (V_n, V_{n+1}) with a straight segment that
+      // grows out of V_n as the pencil approaches V_{n+1},
+      // holds at full length for `CHORD_VISIBLE_STEPS` further
+      // quarter-turns, then retracts. Each chord is the
+      // diagonal of one nested rectangle (V_n and V_{n+1} are
+      // opposite corners). Central chords near the pole —
+      // those whose on-canvas length has fallen below
+      // `CHORD_CENTRAL_PX` — flip their shrink direction so
+      // they're absorbed outward (V_b side) rather than peeled
+      // back from V_a, matching the inward-scaling motion the
+      // central region is under. Iteration bounds are tight to
+      // the active window: only the at-most `visibleSteps + 2`
+      // chords that could possibly be visible.
+      ctx.strokeStyle = strokeFaint;
+      ctx.lineWidth = RECT_STROKE_PX;
+      ctx.beginPath();
+      const chordIndexMax = Math.floor(thR / HALF_PI);
+      const chordIndexMin = chordIndexMax - CHORD_VISIBLE_STEPS - 1;
+      for (let n = chordIndexMin; n <= chordIndexMax; n++) {
+        const thetaA = n * HALF_PI;
+        const state = chordStateAt(thetaA, thR);
+        if (state.phase === 'hidden') continue;
+        const va = logSpiralPoint(thetaA);
+        const vb = logSpiralPoint(thetaA + HALF_PI);
+        const chordPx = scale * Math.hypot(vb.x - va.x, vb.y - va.y);
+        const flip = chordPx < CHORD_CENTRAL_PX;
+        const seg = chordSegment(thetaA, state, flip);
+        if (!seg) continue;
+        ctx.moveTo(mx(seg.start), my(seg.start));
+        ctx.lineTo(mx(seg.end), my(seg.end));
+      }
       ctx.stroke();
 
       // Pencil tip — a small filled dot in the same ink colour

@@ -128,6 +128,90 @@ export const goldenRectangles = (stepsOut = 8, stepsIn = 60): Rectangle[] => {
   return rects;
 };
 
+// ─── Chord animation primitives ──────────────────────────────────
+//
+// The renderer draws a chord between each pair of consecutive
+// spiral vertices V_a = logSpiralPoint(θ_a) and V_b =
+// logSpiralPoint(θ_a + π/2). The chord animates in lockstep with
+// the pencil tip θ:
+//
+//   progress = (θ_tip − θ_a) / (π/2)         (chord-steps)
+//
+//   progress  < 0          → hidden
+//   0 ≤ p     < 1          → growing (V_a → tip)
+//   1 ≤ p     < N          → full    (V_a → V_b, held)
+//   N ≤ p     < N + 1      → shrinking
+//   N + 1 ≤ p              → hidden
+//
+// where N = `visibleSteps` (default `CHORD_VISIBLE_STEPS`).
+//
+// All this lives as pure functions so the timing logic is
+// unit-testable independent of canvas / requestAnimationFrame —
+// the rendering bug surface is the part we want pinned down.
+
+/** Number of chord-steps a chord stays at full length after the
+ *  pencil has finished tracing it. 4 = one full turn worth. */
+export const CHORD_VISIBLE_STEPS = 4;
+
+export type ChordPhase = 'hidden' | 'growing' | 'full' | 'shrinking';
+
+export type ChordState = {
+  readonly phase: ChordPhase;
+  /** `growing`: portion drawn from V_a toward V_b (0..1).
+   *  `shrinking` (normal):  fraction *remaining*, anchored on
+   *    V_b — draw `[V_a + (1 − fraction)·dir, V_b]`.
+   *  `shrinking` (flipped): fraction remaining anchored on
+   *    V_a — draw `[V_a, V_a + fraction·dir]`.
+   *  `hidden` / `full`: 0 / 1 (not used by the renderer). */
+  readonly fraction: number;
+};
+
+/** Pure: chord state for the pair (V_a, V_a + π/2) at pencil θ_tip.
+ *  `visibleSteps` controls how many chord-steps the chord remains
+ *  at full length after the pencil has crossed V_b. */
+export const chordStateAt = (
+  thetaA: number,
+  thetaTip: number,
+  visibleSteps: number = CHORD_VISIBLE_STEPS,
+): ChordState => {
+  const progress = (thetaTip - thetaA) / (Math.PI / 2);
+  if (progress < 0) return { phase: 'hidden', fraction: 0 };
+  if (progress < 1) return { phase: 'growing', fraction: progress };
+  if (progress < visibleSteps) return { phase: 'full', fraction: 1 };
+  if (progress < visibleSteps + 1) {
+    return { phase: 'shrinking', fraction: visibleSteps + 1 - progress };
+  }
+  return { phase: 'hidden', fraction: 0 };
+};
+
+/** Pure: the on-spiral sub-segment to render given a ChordState.
+ *  Returns `null` for hidden chords. `flipShrinkDirection` flips
+ *  the shrink anchor (V_a side instead of V_b side) — used for
+ *  the central pole-region chords so they shrink toward the
+ *  outward direction the pencil is heading. */
+export const chordSegment = (
+  thetaA: number,
+  state: ChordState,
+  flipShrinkDirection = false,
+): { readonly start: Vec2; readonly end: Vec2 } | null => {
+  if (state.phase === 'hidden') return null;
+  const va = logSpiralPoint(thetaA);
+  const vb = logSpiralPoint(thetaA + Math.PI / 2);
+  const lerp = (t: number): Vec2 => ({
+    x: va.x + (vb.x - va.x) * t,
+    y: va.y + (vb.y - va.y) * t,
+  });
+  if (state.phase === 'full') return { start: va, end: vb };
+  if (state.phase === 'growing') return { start: va, end: lerp(state.fraction) };
+  // shrinking
+  if (flipShrinkDirection) {
+    // Drop V_b side first → remaining slice stays anchored on V_a.
+    return { start: va, end: lerp(state.fraction) };
+  }
+  // Default: drop V_a side first → remaining slice stays on V_b.
+  return { start: lerp(1 - state.fraction), end: vb };
+};
+
 // Internal helpers retained for the tests so the iteration's
 // convergence rate can be asserted without re-deriving it.
 export const __internal__ = {
