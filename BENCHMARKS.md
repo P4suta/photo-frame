@@ -236,4 +236,23 @@ same fixture × stage matrix. Negative = faster.
 | C1 zero-copy `Pixels` handoff | post-C1 | **1.17 s** (-6 %) | 270 ms (noise) | 806 ms (-1.5 %) | **92 ms** (-30 %) | dhat: total alloc 535 MB → 439 MB (-97 MB ≈ one 92 MB RGBA buffer), peak 336 → 243 MB |
 | D1 zune-jpeg JPEG decode | post-D1 | **1.11 s** (-11 % vs baseline) | **217 ms** (-19 %) | 788 ms (-2 %, noise) | 94 ms | dhat: total alloc 439 MB → 353 MB (-86 MB, zune allocates less than image-crate's jpeg-decoder); peak unchanged at 243 MB. Decode wins range from -9 % (orientation=8, IDCT not on critical path) to -23 % (landscape) — confirms zune's SIMD YCbCr→RGB is the dominant accelerator |
 | D2 fast_image_resize | post-D2 | 1.10 s (default, no change — resize not on default path) | 217 ms | 788 ms | 91 ms | **Resize itself: 438 → 113 ms (-74 %, ~4×)** on 24 MP. SNS-preset pipeline (CLI `--preset sns`) on 24 MP real Z 5: **0.47 s end-to-end** vs estimated ~0.80 s with image-crate resize. `resize_fir_lanczos3_to_sns` bench: 213 MP/s (was 55 MP/s with image-crate). rayon worker pool + SIMD per-row Lanczos3. WASM build green — fir falls back to single-thread on wasm32 |
+| C4 row-parallel compose canvas | post-C4 | **1.02 s** (-18 % vs baseline, -7 % vs D2) | 216 ms | 787 ms | **18 ms** (-86 % vs baseline, -80 % vs D2) | Single-pass row-parallel `build_canvas_with_photo` replaces the two-pass `from_pixel` + `imageops::replace` sequence. Each canvas row is dispatched to a rayon worker that fills bg + copies the photo bytes + fills the remaining bg, all in one cache-friendly walk. Compose throughput: 184 MP/s → **1.33 GP/s** (7× faster). Panorama frame: 1.79 ms → 0.30 ms (6× faster). No memory regression (the `vec![0; n]` zero-init is cheaper than `from_pixel` was) |
+
+### Aggregate (baseline → post-C4 on 24 MP real Z 5 landscape)
+
+| stage | baseline | current | delta |
+| --- | ---: | ---: | ---: |
+| decode | 268 ms | 216 ms | -19 % |
+| frame | 131 ms | 18 ms | **-86 %** |
+| encode q92 | 819 ms | 787 ms | -4 % (noise) |
+| **pipeline default** | **1245 ms** | **1019 ms** | **-18 %** |
+| pipeline SNS (CLI wall-clock) | ~1.5–1.8 s (est) | **~0.47 s** | **~-75 %** |
+
+The default pipeline's remaining wall-clock is dominated by encode q92
+(~77 % of the new total). JPEG entropy coding is fundamentally
+sequential (Huffman state chains across blocks), so further wins on
+that stage need either an encoder swap to one that exposes restart
+markers / parallel chunks, or accepting a quality tradeoff to lower
+the coding cost. Phase D3 (encoder tuning) is the next data-justified
+target if the existing image-crate JpegEncoder API surface allows it.
 

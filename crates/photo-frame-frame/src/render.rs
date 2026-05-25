@@ -2,8 +2,9 @@
 //! return packed RGBA8 [`Pixels`].
 
 use fast_image_resize as fir;
-use image::{imageops, DynamicImage, ImageBuffer, Rgba, RgbaImage};
+use image::{DynamicImage, ImageBuffer, Rgba, RgbaImage};
 use photo_frame_types::{Photograph, Pixels};
+use rayon::prelude::*;
 
 use crate::format::{caption_from, Caption};
 use crate::geometry::{self, Layout, MetaLayout};
@@ -107,14 +108,7 @@ fn compose_canvas(
     opts: &FrameOptions,
 ) -> RgbaImage {
     let (canvas_w, canvas_h) = layout.canvas_size;
-    let mut canvas = RgbaImage::from_pixel(canvas_w, canvas_h, opts.theme.background());
-
-    imageops::replace(
-        &mut canvas,
-        photo,
-        i64::from(layout.photo_origin.0),
-        i64::from(layout.photo_origin.1),
-    );
+    let mut canvas = build_canvas_with_photo(canvas_w, canvas_h, photo, layout, opts);
 
     if let Some(ml) = layout.meta.as_ref() {
         let renderer = Renderer::new(opts.theme.ink());
@@ -129,6 +123,88 @@ fn compose_canvas(
     }
 
     canvas
+}
+
+/// Phase C4 — single-pass row-parallel canvas build.
+///
+/// Replaces the previous two-pass sequence
+/// (`RgbaImage::from_pixel` to fill with bg, then `imageops::replace`
+/// to overwrite the photo region). Each row is independent, so we
+/// allocate the destination Vec up-front and have rayon dispatch
+/// rows to worker threads. Each row does at most three memcpy / memset
+/// operations: left margin (bg), photo bytes, right margin (bg).
+/// Rows above/below the photo are a single memset.
+///
+/// Single-pass also halves memory traffic (was 2× canvas-size scans:
+/// once to fill, once to overwrite). For a 24 MP canvas (~98 MB),
+/// that's the difference between ~200 MB and ~100 MB of L1/L2-miss
+/// load, on top of the parallel speedup.
+fn build_canvas_with_photo(
+    canvas_w: u32,
+    canvas_h: u32,
+    photo: &RgbaImage,
+    layout: &Layout,
+    opts: &FrameOptions,
+) -> RgbaImage {
+    let bg = opts.theme.background();
+    let bg_bytes = bg.0;
+    let canvas_stride = (canvas_w as usize) * 4;
+    let total_bytes = (canvas_h as usize) * canvas_stride;
+
+    let (photo_origin_x, photo_origin_y) = layout.photo_origin;
+    let (photo_width, photo_height) = photo.dimensions();
+    let photo_left = photo_origin_x as usize;
+    let photo_top = photo_origin_y as usize;
+    let photo_bottom = photo_top + (photo_height as usize);
+    let photo_byte_stride = (photo_width as usize) * 4;
+    let photo_data = photo.as_raw();
+    let photo_byte_offset = photo_left * 4;
+
+    // Layout invariant: the geometry layer (`crate::geometry`) only ever
+    // produces a canvas big enough to contain the photo rectangle at
+    // the given origin. Assert it here so an out-of-bounds origin is a
+    // loud panic, not a silent slice OOB inside the parallel block.
+    debug_assert!(photo_left + (photo_width as usize) <= canvas_w as usize);
+    debug_assert!(photo_bottom <= canvas_h as usize);
+
+    let mut canvas_data: Vec<u8> = vec![0_u8; total_bytes];
+
+    canvas_data
+        .par_chunks_mut(canvas_stride)
+        .enumerate()
+        .for_each(|(y, row)| {
+            // Rows outside the photo's vertical extent: pure bg.
+            if y < photo_top || y >= photo_bottom {
+                fill_row_with_bg(row, bg_bytes);
+                return;
+            }
+            // Inside the photo's vertical extent: left margin bg, photo
+            // bytes, right margin bg. Empty margins (photo_x = 0 or
+            // photo flush right) skip the corresponding fill.
+            if photo_byte_offset > 0 {
+                fill_row_with_bg(&mut row[..photo_byte_offset], bg_bytes);
+            }
+            let src_y = y - photo_top;
+            let src_start = src_y * photo_byte_stride;
+            row[photo_byte_offset..photo_byte_offset + photo_byte_stride]
+                .copy_from_slice(&photo_data[src_start..src_start + photo_byte_stride]);
+            let right_start = photo_byte_offset + photo_byte_stride;
+            if right_start < row.len() {
+                fill_row_with_bg(&mut row[right_start..], bg_bytes);
+            }
+        });
+
+    RgbaImage::from_raw(canvas_w, canvas_h, canvas_data)
+        .expect("canvas buffer length matches canvas_w * canvas_h * 4 by construction")
+}
+
+/// Fill `row` (which must be `n * 4` bytes long) with repeating `bg`
+/// quartets. `slice::chunks_exact_mut(4)` codegens to a tight memset
+/// when the optimiser recognises the constant-fill pattern.
+fn fill_row_with_bg(row: &mut [u8], bg: [u8; 4]) {
+    for px in row.chunks_exact_mut(4) {
+        px.copy_from_slice(&bg);
+    }
 }
 
 fn draw_caption_edges(

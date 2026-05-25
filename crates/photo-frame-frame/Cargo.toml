@@ -21,8 +21,13 @@ image             = { workspace = true }
 fast_image_resize = { workspace = true }
 imageproc         = { workspace = true }
 ab_glyph          = { workspace = true }
-thiserror         = { workspace = true }
-tracing           = { workspace = true }
+# Phase C4 — `compose_canvas` parallelises the canvas background fill
+# + photo copy across worker threads via `rayon::par_chunks_mut` on
+# the row stride. Rayon is already a workspace dep (CLI batch
+# processing uses it); same crate keeps the dep graph flat.
+rayon     = { workspace = true }
+thiserror = { workspace = true }
+tracing   = { workspace = true }
 
 [lints]
 workspace = true
