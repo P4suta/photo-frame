@@ -764,7 +764,12 @@ export const App = () => {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = `photo-frame-${timestamp}.zip`;
+    // File-count in the archive name so successive batches read
+    // unambiguously in the Downloads folder ("photo-frame-12-…
+    // .zip" tells the user how many photos are inside without
+    // unzipping). Singular vs plural keeps the chrome friendly.
+    const noun = entries.length === 1 ? 'photo' : 'photos';
+    anchor.download = `photo-frame-${entries.length}${noun}-${timestamp}.zip`;
     anchor.click();
     URL.revokeObjectURL(url);
   };
