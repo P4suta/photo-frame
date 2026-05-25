@@ -32,6 +32,17 @@ use tracing::{error, info};
 use tracing_wasm::{set_as_global_default_with_config, WASMLayerConfigBuilder};
 use wasm_bindgen::prelude::{wasm_bindgen, JsCast, JsError, JsValue};
 
+// Phase F2 — re-export `wasm_bindgen_rayon::init_thread_pool` so JS
+// callers can `await initThreadPool(N)` after `await init()` to bring
+// the rayon worker pool online. Gated on `target_arch = "wasm32"` so
+// the workspace's stable-rustc host builds (clippy, tests, etc.)
+// don't pull the wasm-only dep into the dep graph for x86_64. JS
+// runtime is responsible for checking `SharedArrayBuffer` support
+// before calling — when SAB is absent the dep falls back gracefully
+// at the `init_thread_pool` JS call site rather than at WASM init.
+#[cfg(target_arch = "wasm32")]
+pub use wasm_bindgen_rayon::init_thread_pool;
+
 #[wasm_bindgen(start)]
 pub fn init() {
     console_error_panic_hook::set_once();

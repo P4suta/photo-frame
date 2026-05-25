@@ -111,17 +111,24 @@ jobs:
   wasm-build:
     name: wasm / pack
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Phase F2 — the wasm crate pins a nightly toolchain via its
+      # local `rust-toolchain.toml` because `wasm-bindgen-rayon`
+      # needs `-Z build-std` to enable wasm atomics. We install
+      # nightly + rust-src explicitly so the just recipe doesn't pay
+      # the ~60 s download on every CI run.
+      - uses: dtolnay/rust-toolchain@nightly
         with:
+          toolchain: nightly-2026-04-01
           targets: wasm32-unknown-unknown
+          components: rust-src
 
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: wasm
+          shared-key: wasm-nightly
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - uses: taiki-e/install-action@v2
@@ -129,6 +136,11 @@ jobs:
           tool: just,wasm-pack
 
       - name: wasm-pack build
+        # `just wasm-build` already strips RUSTUP_TOOLCHAIN before
+        # invoking wasm-pack so the per-crate `rust-toolchain.toml`
+        # selects nightly cleanly — but CI runners don't set
+        # RUSTUP_TOOLCHAIN in the first place, so this is a no-op
+        # extra safety on top.
         run: just wasm-build
 
       - name: Upload WASM bundle
@@ -160,6 +172,13 @@ jobs:
         working-directory: crates/photo-frame-wasm/www
         run: |
           bun install --frozen-lockfile
+          # Phase F2 — mirror the coi-serviceworker into public/ so
+          # the Vite build picks it up. Service worker synthesises
+          # COOP/COEP headers on hosts that can't set them (GitHub
+          # Pages), which is the precondition for SharedArrayBuffer
+          # and therefore for the wasm-bindgen-rayon thread pool.
+          mkdir -p public
+          cp node_modules/coi-serviceworker/coi-serviceworker.js public/coi-serviceworker.js
           bun run build
           # Ship the Geist Sans attribution verbatim alongside the WASM
           # bundle — required by the OFL licence the upstream font is

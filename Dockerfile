@@ -133,6 +133,16 @@ RUN curl -fsSL https://bun.sh/install | bash \
 RUN rustup component add clippy rustfmt \
  && rustup target add wasm32-unknown-unknown
 
+# Phase F2 — nightly toolchain for `crates/photo-frame-wasm/` only.
+# rust-toolchain.toml inside that crate pins nightly-2026-04-01; we
+# install it ahead of time so `just wasm-build` doesn't pay the
+# 60-second download on first invocation. rust-src is the std
+# source needed for `-Z build-std`, which `wasm-bindgen-rayon`
+# requires (see crates/photo-frame-wasm/.cargo/config.toml).
+RUN rustup install nightly-2026-04-01 --profile minimal \
+ && rustup component add --toolchain nightly-2026-04-01 rust-src rustfmt clippy \
+ && rustup target  add --toolchain nightly-2026-04-01 wasm32-unknown-unknown
+
 # Cargo tooling: install cargo-binstall once from source, then use it to
 # pull every other tool as a precompiled GitHub-release binary. Drops
 # minutes (compile) to seconds (download + extract) per tool. cargo-chef

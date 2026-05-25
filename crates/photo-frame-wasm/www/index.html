@@ -4,6 +4,17 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>photo-frame</title>
+    <!--
+      Phase F2 — coi-serviceworker registers a service worker that
+      injects COOP/COEP headers into the page response. The browser
+      then promotes the page to `crossOriginIsolated`, which is the
+      precondition for `SharedArrayBuffer` and therefore for the
+      WASM-side `wasm-bindgen-rayon` thread pool. Loaded as the
+      very first <script> so registration happens before any module
+      that touches WASM. Hosts that already serve the headers
+      directly (Vite dev / preview) ignore the SW transparently.
+    -->
+    <script src="./coi-serviceworker.js"></script>
   </head>
   <body>
     <div id="root"></div>

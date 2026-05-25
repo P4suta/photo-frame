@@ -22,6 +22,18 @@ console_error_panic_hook = "0.1"
 tracing                  = { workspace = true }
 tracing-wasm             = "0.2"
 
+# Phase F2 — wasm threads for rayon-aware code paths
+# (compose_canvas par_chunks_mut + fast_image_resize). wasm32-only
+# target dep so workspace-host builds (`cargo build --workspace`
+# on x86_64) don't try to compile it. Wasm32 builds pick it up via
+# the per-crate `.cargo/config.toml` + nightly toolchain pin
+# (`rust-toolchain.toml` in the same directory). Runtime use of
+# threads still requires the host page to be `crossOriginIsolated`
+# — the web bundle ships `coi-serviceworker` to satisfy that on
+# GitHub Pages.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-rayon = "1"
+
 [lints]
 workspace = true
 

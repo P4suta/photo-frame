@@ -58,8 +58,15 @@ test:
 
 # ── WASM ─────────────────────────────────────────────────────────────────────
 
+# `env -u RUSTUP_TOOLCHAIN` strips the host environment's stable pin
+# (mise/devcontainer profile sets RUSTUP_TOOLCHAIN=1.95.0 for the
+# rest of the workspace) so rust-toolchain.toml inside the wasm
+# crate can elect its nightly pin instead. The nightly is needed
+# because `wasm-bindgen-rayon` requires `target-feature=+atomics`,
+# which only works with `-Z build-std` (nightly only). All other
+# `just` recipes inherit the host pin unchanged.
 wasm-build:
-    cd crates/photo-frame-wasm && wasm-pack build --target web --release --out-dir www/pkg
+    cd crates/photo-frame-wasm && env -u RUSTUP_TOOLCHAIN wasm-pack build --target web --release --out-dir www/pkg
 
 # Mirror the Geist font files from the frame crate into the web bundle's
 # public/ directory so Vite serves them at /fonts/Geist/. Canonical source
@@ -69,18 +76,34 @@ copy-web-fonts:
     mkdir -p crates/photo-frame-wasm/www/public/fonts/Geist
     cp -p crates/photo-frame-frame/assets/fonts/Geist/. crates/photo-frame-wasm/www/public/fonts/Geist/ -r
 
+# Mirror the coi-serviceworker JS into the web bundle's public/
+# directory. The service worker masquerades as the COOP/COEP HTTP
+# headers SharedArrayBuffer needs on hosts that can't set headers
+# directly (GitHub Pages). Loaded as the very first <script> in
+# index.html so it registers before any module that touches WASM.
+copy-coi-sw:
+    mkdir -p crates/photo-frame-wasm/www/public
+    cp -p crates/photo-frame-wasm/www/node_modules/coi-serviceworker/coi-serviceworker.js \
+          crates/photo-frame-wasm/www/public/coi-serviceworker.js
+
 # Build the Vite/SolidJS web bundle on top of the WASM artefact. Mirrors what
 # `.github/workflows/pages.yml` runs on push to main, so `just ci` catches
 # TypeScript or Vite regressions locally instead of letting Pages discover
 # them after the merge.
 web-build: wasm-build copy-web-fonts
-    cd crates/photo-frame-wasm/www && bun install --frozen-lockfile && bun run build
+    cd crates/photo-frame-wasm/www && bun install --frozen-lockfile
+    just copy-coi-sw
+    cd crates/photo-frame-wasm/www && bun run build
 
 wasm-dev: wasm-build copy-web-fonts
-    cd crates/photo-frame-wasm/www && bun install && bun run dev -- --host 0.0.0.0
+    cd crates/photo-frame-wasm/www && bun install
+    just copy-coi-sw
+    cd crates/photo-frame-wasm/www && bun run dev -- --host 0.0.0.0
 
 wasm-preview: wasm-build copy-web-fonts
-    cd crates/photo-frame-wasm/www && bun install && bun run build && bun run preview -- --host 0.0.0.0
+    cd crates/photo-frame-wasm/www && bun install
+    just copy-coi-sw
+    cd crates/photo-frame-wasm/www && bun run build && bun run preview -- --host 0.0.0.0
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
 

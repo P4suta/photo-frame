@@ -1,0 +1,28 @@
+# Pinned nightly toolchain for the WASM crate only.
+#
+# Why nightly: `wasm-bindgen-rayon` requires `target-feature=+atomics`
+# to enable the cfg-gated thread-pool code, and on stable rustc 1.95
+# the `atomics` flag is still an "unstable feature" — rustc accepts
+# it (with a warning) but `cfg(target_feature = "atomics")` remains
+# false, so the dep's `compile_error!` fires. The standard escape
+# hatch is to use a nightly toolchain plus `-Z build-std` so the
+# pre-built standard library is rebuilt with atomics support — that
+# combo is what this file selects.
+#
+# Why scoped to this crate: cargo's config / toolchain lookup walks
+# UP from the current working directory. The justfile recipes for
+# wasm (`wasm-build`, `wasm-dev`, `wasm-preview`, `web-build`)
+# `cd crates/photo-frame-wasm` before invoking cargo / wasm-pack,
+# so the nightly toolchain is selected only for those flows. The
+# rest of the workspace (CLI, bench, decode/frame/encode crates)
+# continues to build on stable rustc 1.95 as before.
+#
+# rust-src is required because `-Z build-std` rebuilds the standard
+# library from source. The wasm32-unknown-unknown target is required
+# because that's what wasm-pack compiles for.
+
+[toolchain]
+channel    = "nightly-2026-04-01"
+components = ["rust-src", "rustfmt", "clippy"]
+targets    = ["wasm32-unknown-unknown"]
+profile    = "minimal"

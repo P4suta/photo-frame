@@ -16,6 +16,12 @@ node_modules
 # frame crate; this directory is a build-time copy so Vite serves them
 # from the bundle root.
 crates/photo-frame-wasm/www/public/fonts/
+
+# coi-serviceworker JS mirrored from node_modules by
+# `just copy-coi-sw` (a sub-step of `just web-build`). Single source
+# of truth is the npm package pinned in package.json; this copy is
+# regenerated on every build and never belongs in git.
+crates/photo-frame-wasm/www/public/coi-serviceworker.js
 .vite
 .cache
 coverage
