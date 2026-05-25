@@ -878,10 +878,20 @@ export const App = () => {
 
         <Show when={mode() === 'single'}>
           <div class={stageCanvas}>
-            {/* φ:1 wrapper carves the preview into a golden
-                rectangle; the contain-fit in paintPreview lets
-                portrait / landscape sources letterbox inside. */}
-            <div class={previewFrame}>
+            {/* The frame's aspect ratio tracks the actual
+                framed-image aspect once a preview is ready —
+                that's what makes the drop shadow line up with
+                the photo's edges instead of with a letterboxed
+                Canvas rect. Before the first preview lands the
+                frame is `auto`-sized off the φ:1 default in
+                `previewFrame`. */}
+            <div
+              class={previewFrame}
+              style={(() => {
+                const px = previewPixels();
+                return px ? { 'aspect-ratio': `${px.width} / ${px.height}` } : {};
+              })()}
+            >
               <canvas ref={canvasRef} class={previewCanvas} />
             </div>
           </div>
