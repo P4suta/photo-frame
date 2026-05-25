@@ -31,17 +31,19 @@ export const gallery = css({
 // is just a stack that respects whatever aspect the image came
 // in at. `break-inside: avoid` prevents the card from being
 // split across a column boundary; `display: inline-block` is the
-// idiomatic way to give CSS columns a clean break unit.
+// idiomatic way to give CSS columns a clean break unit. A subtle
+// drop shadow gives each card depth so the boundary between
+// framed photo and page stays legible without needing a border.
 export const galleryCard = css({
   display: 'inline-block',
   width: 'full',
   marginBottom: 'phi.m1',
   padding: 'phi.m1',
   background: 'transparent',
-  border: 'soft',
   borderRadius: 'phi.m2',
   position: 'relative',
   breakInside: 'avoid',
+  boxShadow: '[0 6px 24px rgba(0, 0, 0, 0.22)]',
 });
 
 // Thumbnail — width-full container that adopts the image's

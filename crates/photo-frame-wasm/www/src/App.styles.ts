@@ -140,7 +140,9 @@ export const stageCanvas = css(stageInnerBase, {
 // The actual aspect-shaped frame the preview canvas sits in.
 // Used as a wrapper around `<canvas>` so the canvas can resolve
 // `width / height: 100%` against a definite block whose
-// proportions are themselves the golden ratio.
+// proportions are themselves the golden ratio. A subtle drop
+// shadow lifts the frame off the page colour so the boundary
+// between framed photo and page stays legible in either theme.
 export const previewFrame = css({
   aspectRatio: '[1.618]',
   maxWidth: 'full',
@@ -152,6 +154,8 @@ export const previewFrame = css({
   display: 'flex',
   alignItems: 'stretch',
   justifyContent: 'stretch',
+  boxShadow: '[0 12px 48px rgba(0, 0, 0, 0.28)]',
+  borderRadius: 'phi.m3',
 });
 
 // Batch variant stretches both axes for the full-width row list.

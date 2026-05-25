@@ -126,20 +126,15 @@ const segmentedButton = defineRecipe({
 const dropZone = defineRecipe({
   className: 'dropZone',
   base: {
-    // The drop zone is *itself* a golden rectangle: width capped
-    // at `phi.7` (≈ 464px), aspect-ratio φ — so the height
-    // settles at `phi.6` (≈ 287px). The shape is the affordance;
-    // the dashed border just outlines it.
-    width: '[min({sizes.phi.7}, 100%)]',
-    aspectRatio: '[1.618]',
-    border: 'dashedStrong',
-    borderRadius: '2',
+    // Drop target spans the whole empty-state stage so the user
+    // can grab any pixel on the page to drop onto — no boxed
+    // affordance, no dashed frame, just centred prompt text
+    // that brightens on hover. The drag-over state inverts the
+    // surface to read as "yes, drop here" without a border.
+    width: 'full',
+    height: 'full',
     background: 'transparent',
     color: 'fg.dim',
-    // Padding ratio matches the outer aspect (φ:1), so the inner
-    // content box stays in the same proportion as the box itself.
-    paddingX: 'phi.0',
-    paddingY: 'phi.m1',
     font: 'inherit',
     fontSize: 'body',
     textAlign: 'center',
@@ -147,14 +142,11 @@ const dropZone = defineRecipe({
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    transition: 'border-color 140ms ease, color 140ms ease, background 140ms ease',
+    transition: 'color 140ms ease, background 140ms ease',
     _hover: {
-      borderColor: 'fg.default',
       color: 'fg.default',
-      outline: 'none',
     },
     _focusVisible: {
-      borderColor: 'fg.default',
       color: 'fg.default',
       outline: 'none',
     },
@@ -162,13 +154,10 @@ const dropZone = defineRecipe({
   variants: {
     over: {
       true: {
-        // Drag-over = one notch stronger than hover: dashed → solid
-        // border. Pure form, no fill — the rest of the chrome is
-        // bg-less so the drop zone shouldn't introduce a tone of
-        // its own.
-        borderStyle: 'solid',
-        borderColor: 'fg.default',
-        color: 'fg.default',
+        // Drag-over: invert the whole pane so the affordance is
+        // unmistakable. No border — the colour swap carries it.
+        background: 'invert.bg',
+        color: 'invert.fg',
       },
       false: {},
     },

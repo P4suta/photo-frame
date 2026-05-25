@@ -28,8 +28,6 @@ import {
   segmented,
   sidebar,
   sidebarFooter,
-  sliderRow,
-  sliderValue,
   stage,
   stageBatch,
   stageCanvas,
@@ -67,9 +65,12 @@ const PREVIEW_LONG_EDGE = 1600;
 // undebounced encode would chase.
 const ESTIMATE_DEBOUNCE_MS = 220;
 
+// `value` mirrors the Rust enum (`paper`/`ink`), `label` is the
+// UI face — direct colour names read more honestly than the
+// material metaphors did.
 const THEMES = [
-  { value: 'paper' as const, label: 'Paper', description: 'White frame, dark text' },
-  { value: 'ink' as const, label: 'Ink', description: 'Soft-black frame, light text' },
+  { value: 'paper' as const, label: 'White', description: 'White frame, dark text' },
+  { value: 'ink' as const, label: 'Black', description: 'Black frame, light text' },
 ] satisfies ReadonlyArray<{ value: FrameTheme; label: string; description: string }>;
 
 // The UI-facing union for the caption picker: either no caption
@@ -835,8 +836,6 @@ export const App = () => {
           <ControlsCommon
             preset={preset()}
             onPreset={applyPreset}
-            quality={quality()}
-            onQuality={setQuality}
             resize={resize()}
             onResize={setResize}
             resizePx={resizePx()}
@@ -902,8 +901,6 @@ export const App = () => {
 type ControlsProps = {
   preset: PresetKey;
   onPreset: (k: PresetKey) => void;
-  quality: number;
-  onQuality: (n: number) => void;
   resize: boolean;
   onResize: (v: boolean) => void;
   resizePx: number;
@@ -916,6 +913,15 @@ type ControlsProps = {
   onShowMeta: (v: boolean) => void;
 };
 
+// The Quality slider used to live here, but it was a leaky
+// abstraction: changing the number didn't snap the Preset
+// segmented above back to a sensible state, and a 1-100 dial
+// without a live preview doesn't communicate "more / less
+// quality" to anyone outside the JPEG encoding world. The
+// preset names (SNS / Standard / Maximum) carry the same
+// information in user-readable form, so the manual dial is
+// gone — `quality` still flows through the signals via
+// `applyPreset`, just not editable on its own.
 const ControlsCommon = (props: ControlsProps) => (
   <div class={controls}>
     <Field label="Preset">
@@ -928,19 +934,6 @@ const ControlsCommon = (props: ControlsProps) => (
         onChange={props.onPreset}
         ariaLabel="Quality preset"
       />
-    </Field>
-
-    <Field label="Quality">
-      <div class={sliderRow}>
-        <input
-          type="range"
-          min={1}
-          max={100}
-          value={props.quality}
-          onInput={(event) => props.onQuality(Number(event.currentTarget.value))}
-        />
-        <output class={sliderValue}>{props.quality}</output>
-      </div>
     </Field>
 
     <Field label="Long edge">
@@ -966,12 +959,12 @@ const ControlsCommon = (props: ControlsProps) => (
       </div>
     </Field>
 
-    <Field label="Theme">
+    <Field label="Background color">
       <Segmented
         options={THEMES.map((t) => ({ value: t.value, label: t.label, title: t.description }))}
         value={props.theme}
         onChange={props.onTheme}
-        ariaLabel="Frame theme"
+        ariaLabel="Frame background colour"
       />
     </Field>
 
