@@ -5,23 +5,23 @@
  * non-trivial WASM call goes through the singleton worker below, so the
  * main thread never blocks on a 24 MP decode or a quality-slider encode.
  *
- * Three concerns concentrate here:
+ * Two concerns concentrate here:
  *
  *   1. **Worker singleton** — `getWorker()` lazily spawns one Worker for
  *      the page lifetime. Multiple workers would re-initialise the WASM
  *      module and burn ~1.6 MB extra per instance.
- *   2. **Request/response correlation** — every call gets a monotonically
- *      increasing `requestId`; the listener resolves only when the reply
- *      ID matches and rejects stale replies silently. A fast slider drag
- *      can flood the worker with N encode requests; only the latest
- *      reply matters and the rest evaporate.
- *   3. **Buffer transfer** — request payloads ride as transferables so a
+ *   2. **Buffer transfer** — request payloads ride as transferables so a
  *      cached 100 MB RGBA isn't memcpied per encode. Callers that need
  *      to keep the buffer (e.g. the App's cached pixels) pass a fresh
  *      `slice()` per call.
+ *
+ * The request/response correlation lives in `lib/worker-channel.ts`
+ * behind a `MessageTarget` seam so it can be exercised against a fake
+ * target without spinning up a real Worker.
  */
 
-import type { WorkerReply, WorkerRequest } from './frame-worker';
+import type { EncodedReply, PreparedReply, WorkerReply, WorkerRequest } from './frame-worker';
+import { createRequestIdAllocator, exchange, type MessageTarget } from './lib/worker-channel';
 
 /**
  * Frame theme — pair of border colour and caption text colour.
@@ -73,96 +73,89 @@ export const disposeWorker = (): void => {
 
 // ── request correlation ─────────────────────────────────────────────────
 
-let nextRequestId = 1;
-const allocRequestId = (): number => {
-  const id = nextRequestId;
-  nextRequestId += 1;
-  return id;
-};
+const allocRequestId = createRequestIdAllocator();
 
-/**
- * Issue one worker request whose reply identifies itself with the same
- * `requestId`. Resolves on a matching success reply, rejects on a
- * matching error reply. Replies for *other* IDs are ignored — letting
- * the slider drag flood the worker harmlessly.
- */
-const exchange = <Req extends WorkerRequest & { requestId: number }, Ok extends WorkerReply>(
-  request: Req,
-  isOk: (reply: WorkerReply) => reply is Ok,
-  transfer: Transferable[],
-): Promise<Ok> =>
-  new Promise<Ok>((resolve, reject) => {
-    const worker = getWorker();
-    const handler = (event: MessageEvent<WorkerReply>): void => {
-      const reply = event.data;
-      // Discard replies for unrelated requests (e.g. stale slider ticks).
-      if (!('requestId' in reply) || reply.requestId !== request.requestId) return;
-      worker.removeEventListener('message', handler);
-      if (reply.kind === 'error') {
-        reject(new Error(reply.message));
-      } else if (isOk(reply)) {
-        resolve(reply);
-      } else {
-        reject(new Error(`unexpected worker reply kind: ${reply.kind}`));
-      }
-    };
-    worker.addEventListener('message', handler);
-    worker.postMessage(request, transfer);
-  });
+const isPreparedReply = (reply: WorkerReply): reply is PreparedReply => reply.kind === 'prepared';
+const isEncodedReply = (reply: WorkerReply): reply is EncodedReply => reply.kind === 'encoded';
 
 // ── public API ──────────────────────────────────────────────────────────
 
 /**
- * Decode `bytes` and render the framed RGBA8 grid in the worker. The
- * returned `rgba` is a fresh buffer (the worker transferred it back) so
- * the caller can keep it around indefinitely.
+ * `_preparePixelsOn` / `_encodeJpegOn` are the channel-target-injected
+ * variants of the public functions below. They exist so unit tests can
+ * drive the request/response shape against a fake `MessageTarget`
+ * without spinning up a real Worker. Production code always goes
+ * through `preparePixels` / `encodeJpeg`, which simply close over
+ * `getWorker()` and the module-global request-id allocator.
  */
-export const preparePixels = async (
+export const _preparePixelsOn = async (
+  target: MessageTarget,
+  requestId: number,
   bytes: Uint8Array,
   frameOptions: FrameOptionsForPrepare,
 ): Promise<PreparedPixels> => {
-  // We send a slice of the input bytes; the caller (DropZone-owned File
-  // buffer) keeps the original.
   const transferred = bytes.slice();
-  const reply = await exchange(
+  const reply = await exchange<WorkerRequest & { requestId: number }, WorkerReply, PreparedReply>(
+    target,
     {
       kind: 'prepare',
-      requestId: allocRequestId(),
+      requestId,
       bytes: transferred,
       frameOptions,
     },
-    (r): r is import('./frame-worker').PreparedReply => r.kind === 'prepared',
+    isPreparedReply,
     [transferred.buffer],
   );
   return { rgba: reply.rgba, width: reply.width, height: reply.height };
 };
 
-/**
- * Encode an RGBA8 buffer at the given JPEG quality in the worker. The
- * caller passes a fresh `slice()` of its cached RGBA so the cache stays
- * intact across overlapping encode requests.
- */
-export const encodeJpeg = async (
+export const _encodeJpegOn = async (
+  target: MessageTarget,
+  requestId: number,
   rgba: Uint8Array,
   width: number,
   height: number,
   quality: number,
 ): Promise<Uint8Array> => {
   const transferred = rgba.slice();
-  const reply = await exchange(
+  const reply = await exchange<WorkerRequest & { requestId: number }, WorkerReply, EncodedReply>(
+    target,
     {
       kind: 'encode',
-      requestId: allocRequestId(),
+      requestId,
       rgba: transferred,
       width,
       height,
       quality,
     },
-    (r): r is import('./frame-worker').EncodedReply => r.kind === 'encoded',
+    isEncodedReply,
     [transferred.buffer],
   );
   return reply.jpeg;
 };
+
+/**
+ * Decode `bytes` and render the framed RGBA8 grid in the worker. The
+ * returned `rgba` is a fresh buffer (the worker transferred it back) so
+ * the caller can keep it around indefinitely.
+ */
+export const preparePixels = (
+  bytes: Uint8Array,
+  frameOptions: FrameOptionsForPrepare,
+): Promise<PreparedPixels> => _preparePixelsOn(getWorker(), allocRequestId(), bytes, frameOptions);
+
+/**
+ * Encode an RGBA8 buffer at the given JPEG quality in the worker. The
+ * caller passes a fresh `slice()` of its cached RGBA so the cache stays
+ * intact across overlapping encode requests.
+ */
+export const encodeJpeg = (
+  rgba: Uint8Array,
+  width: number,
+  height: number,
+  quality: number,
+): Promise<Uint8Array> =>
+  _encodeJpegOn(getWorker(), allocRequestId(), rgba, width, height, quality);
 
 /**
  * Render a low-resolution framed JPEG of `bytes` at the caller's

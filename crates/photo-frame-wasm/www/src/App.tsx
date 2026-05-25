@@ -51,6 +51,7 @@ import {
   type WorkerRequest,
 } from './frame-client';
 import { Gallery } from './Gallery';
+import { createGenerationGate } from './lib/batch-sequencer';
 import {
   CAPTION_MODES,
   type CaptionMode,
@@ -249,13 +250,13 @@ export const App = () => {
   //      these calls so each prefetch only pays the frame stage
   //      (~50–200 ms at preview res), not a full decode.
   //
-  // `prepareGeneration` invalidates in-flight prefetches when the
+  // `prepareGate` invalidates in-flight prefetches when the
   // user drops a new image or moves the max-long-edge slider — only
   // the *currently relevant* scope ever writes back into the map.
   // The Worker serialises requests via `exchange()`'s request-ID
-  // filter, and stale completions are dropped by the generation
-  // check before they touch the signal.
-  let prepareGeneration = 0;
+  // filter, and stale completions are dropped by the gate's
+  // `isCurrent` check before they touch the signal.
+  const prepareGate = createGenerationGate();
   createEffect(
     on(
       () => {
@@ -268,8 +269,7 @@ export const App = () => {
       },
       (scope) => {
         if (!scope) return;
-        prepareGeneration += 1;
-        const gen = prepareGeneration;
+        const gen = prepareGate.bump();
         setPreviewVariants(new Map());
         const maxLongEdge = scope.maxLongEdge;
         // Snapshot the user-visible variant at scope-change time —
@@ -305,7 +305,7 @@ export const App = () => {
           show_meta: showMeta(),
           max_long_edge: maxLongEdge,
         };
-        void runPreparePromise(current, opts, key, prepareGeneration);
+        void runPreparePromise(current, opts, key, prepareGate.current());
       },
       { defer: true },
     ),
@@ -320,7 +320,7 @@ export const App = () => {
     setStatus('Framing preview…');
     try {
       const pixels = await preparePixels(current.data, opts);
-      if (gen !== prepareGeneration || single() !== current) return;
+      if (!prepareGate.isCurrent(gen) || single() !== current) return;
       setPreviewVariants((m) => {
         const next = new Map(m);
         next.set(key, pixels);
@@ -328,7 +328,7 @@ export const App = () => {
       });
       setStatus('');
     } catch (error) {
-      if (gen === prepareGeneration) setStatus(`Error: ${stringifyError(error)}`);
+      if (prepareGate.isCurrent(gen)) setStatus(`Error: ${stringifyError(error)}`);
     }
   };
 
@@ -346,13 +346,13 @@ export const App = () => {
       max_long_edge: maxLongEdge,
     };
     await runPreparePromise(current, initialOpts, initialKey, gen);
-    if (gen !== prepareGeneration) return;
+    if (!prepareGate.isCurrent(gen)) return;
     // Sequential background prefetch — Worker serialises anyway, and
     // sequencing means a user-initiated `runPreparePromise` from the
     // toggle effect above only has at most one prefetch request in
     // flight ahead of it to wait on (~50–200 ms at preview res).
     for (const v of ALL_VARIANTS) {
-      if (gen !== prepareGeneration) return;
+      if (!prepareGate.isCurrent(gen)) return;
       const key = variantKey(v.theme, v.layout, v.showMeta);
       if (previewVariants().has(key)) continue;
       const opts: FrameOptionsForPrepare = {
@@ -363,7 +363,7 @@ export const App = () => {
       };
       try {
         const pixels = await preparePixels(current.data, opts);
-        if (gen !== prepareGeneration) return;
+        if (!prepareGate.isCurrent(gen)) return;
         setPreviewVariants((m) => {
           const next = new Map(m);
           next.set(key, pixels);
@@ -506,11 +506,11 @@ export const App = () => {
   // 30-file batch costs roughly N · (decode-once + frame-stage)
   // not N · 2 decode passes.
   //
-  // A `generation` counter invalidates in-flight thumbnails when
-  // the user drops a new batch or toggles settings — stale promises
-  // resolve into a no-op instead of writing the wrong preview into
-  // the wrong row.
-  let thumbnailGeneration = 0;
+  // A generation gate invalidates in-flight thumbnails when the
+  // user drops a new batch or toggles settings — stale promises
+  // resolve into a no-op instead of writing the wrong preview
+  // into the wrong row.
+  const thumbnailGate = createGenerationGate();
   let thumbnailDebounce: ReturnType<typeof setTimeout> | null = null;
   createEffect(
     on(
@@ -545,8 +545,7 @@ export const App = () => {
     files: DroppedFile[],
     options: Omit<FrameOptionsForPrepare, 'max_long_edge'>,
   ): Promise<void> => {
-    thumbnailGeneration += 1;
-    const gen = thumbnailGeneration;
+    const gen = thumbnailGate.bump();
     // Revoke previous thumbnails and clear the field on every row so
     // the gallery shows pulsing placeholders again immediately.
     setBatchRows((rows) => {
@@ -559,17 +558,17 @@ export const App = () => {
       return rows.map(({ thumbnailUrl: _, ...rest }) => rest);
     });
     for (const file of files) {
-      if (gen !== thumbnailGeneration) return;
+      if (!thumbnailGate.isCurrent(gen)) return;
       try {
         const blob = await generateThumbnailBlob(file.data, options, THUMBNAIL_LONG_EDGE);
-        if (gen !== thumbnailGeneration) return;
+        if (!thumbnailGate.isCurrent(gen)) return;
         const url = URL.createObjectURL(blob);
         setBatchRows((rows) =>
           rows.map((r) => {
             if (r.key !== file.name) return r;
             // Defensive: if a newer generation already wrote a
             // thumbnail for this row, revoke our late arrival.
-            if (r.thumbnailUrl && gen !== thumbnailGeneration) {
+            if (r.thumbnailUrl && !thumbnailGate.isCurrent(gen)) {
               URL.revokeObjectURL(url);
               return r;
             }
@@ -578,7 +577,7 @@ export const App = () => {
           }),
         );
       } catch (error) {
-        if (gen !== thumbnailGeneration) return;
+        if (!thumbnailGate.isCurrent(gen)) return;
         // Thumbnail failure is non-fatal — the gallery keeps the
         // placeholder visible. Surface the error so it's not silent
         // (memory: "production error handling — no silent fallbacks").
@@ -592,16 +591,17 @@ export const App = () => {
     // batch encode (which dwarfs each thumb in cost) would
     // grab the Worker first and the user would stare at
     // pulsing placeholders for the whole batch's duration.
-    if (gen === thumbnailGeneration) onProcessBatch();
+    if (thumbnailGate.isCurrent(gen)) onProcessBatch();
   };
 
   onCleanup(() => {
     if (thumbnailDebounce !== null) clearTimeout(thumbnailDebounce);
-    // Phase G2 — bumping the generation invalidates any in-flight
-    // prepare/prefetch promises so their completion handlers can't
-    // touch the (about-to-be-disposed) signal.
-    prepareGeneration += 1;
-    thumbnailGeneration += 1;
+    // Phase G2 — bumping every gate invalidates any in-flight
+    // prepare/prefetch/thumbnail promises so their completion
+    // handlers can't touch the (about-to-be-disposed) signal.
+    prepareGate.bump();
+    thumbnailGate.bump();
+    batchGate.bump();
     revokeAllBatchUrls();
     disposeWorker();
   });
@@ -641,7 +641,7 @@ export const App = () => {
   // into the new batch's rows. The user never has to click a
   // "Process" button — by the time they reach the download
   // affordance, the resultUrl is already populated.
-  let batchProcessGeneration = 0;
+  const batchGate = createGenerationGate();
   let batchProcessHandler: ((event: MessageEvent<WorkerReply>) => void) | null = null;
   const detachBatchProcessHandler = (): void => {
     if (batchProcessHandler === null) return;
@@ -651,15 +651,14 @@ export const App = () => {
   const onProcessBatch = (): void => {
     const files = batchFiles();
     if (!files) return;
-    batchProcessGeneration += 1;
-    const gen = batchProcessGeneration;
+    const gen = batchGate.bump();
     // Detach the previous run's listener so it can't race into
     // the new generation's row state.
     detachBatchProcessHandler();
     setStatus(`Processing ${files.length} files in the background…`);
     const w = getWorker();
     const handle = (event: MessageEvent<WorkerReply>): void => {
-      if (gen !== batchProcessGeneration) return;
+      if (!batchGate.isCurrent(gen)) return;
       const msg = event.data;
       if (msg.kind === 'progress') {
         setBatchRows((rows) =>
