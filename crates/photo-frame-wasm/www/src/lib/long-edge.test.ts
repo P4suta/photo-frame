@@ -1,9 +1,11 @@
+import * as fc from 'fast-check';
 import { describe, expect, test } from 'vitest';
 import {
   LONG_EDGE_OPTIONS,
   type LongEdgeKey,
   longEdgeKeyFor,
   PRESETS,
+  pickAutoDemoteKey,
   sourceLongEdgeOf,
 } from './long-edge';
 
@@ -80,5 +82,62 @@ describe('sourceLongEdgeOf', () => {
     // contract is "single wins" — pin it so a future refactor
     // doesn't silently flip it.
     expect(sourceLongEdgeOf({ longEdge: 5000 }, [{ longEdge: 100 }])).toBe(5000);
+  });
+});
+
+describe('pickAutoDemoteKey', () => {
+  test('null source keeps the current selection', () => {
+    expect(pickAutoDemoteKey(null, '4k')).toBe<LongEdgeKey>('4k');
+    expect(pickAutoDemoteKey(null, 'full')).toBe<LongEdgeKey>('full');
+  });
+
+  test('current cap ≤ source: keep current', () => {
+    expect(pickAutoDemoteKey(2000, 'hd')).toBe<LongEdgeKey>('hd');
+    expect(pickAutoDemoteKey(1920, 'fhd')).toBe<LongEdgeKey>('fhd');
+  });
+
+  test("'full' is always kept (its cap is null = source-size)", () => {
+    expect(pickAutoDemoteKey(100, 'full')).toBe<LongEdgeKey>('full');
+  });
+
+  test('cap > source snaps to the largest valid cap', () => {
+    // 4K (3840) selected, source is only 2000 → demote to FHD (1920).
+    expect(pickAutoDemoteKey(2000, '4k')).toBe<LongEdgeKey>('fhd');
+    // 4K selected, source 1500 → FHD too big → demote to HD (1280).
+    expect(pickAutoDemoteKey(1500, '4k')).toBe<LongEdgeKey>('hd');
+  });
+
+  test("source smaller than HD falls back to 'full'", () => {
+    expect(pickAutoDemoteKey(800, '4k')).toBe<LongEdgeKey>('full');
+    expect(pickAutoDemoteKey(800, 'fhd')).toBe<LongEdgeKey>('full');
+    expect(pickAutoDemoteKey(800, 'hd')).toBe<LongEdgeKey>('full');
+  });
+
+  test('property: result cap is always null or ≤ source', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 1, max: 8000 }),
+        fc.constantFrom('full', '4k', 'fhd', 'hd') as fc.Arbitrary<LongEdgeKey>,
+        (src, current) => {
+          const out = pickAutoDemoteKey(src, current);
+          const outCap = LONG_EDGE_OPTIONS[out].maxLongEdge;
+          if (outCap !== null) expect(outCap).toBeLessThanOrEqual(src);
+        },
+      ),
+    );
+  });
+
+  test('idempotent: applying twice yields the same result', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 1, max: 8000 }),
+        fc.constantFrom('full', '4k', 'fhd', 'hd') as fc.Arbitrary<LongEdgeKey>,
+        (src, current) => {
+          const once = pickAutoDemoteKey(src, current);
+          const twice = pickAutoDemoteKey(src, once);
+          expect(twice).toBe(once);
+        },
+      ),
+    );
   });
 });

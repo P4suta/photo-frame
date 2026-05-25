@@ -1,3 +1,4 @@
+import { downloadZip } from 'client-zip';
 import {
   createEffect,
   createMemo,
@@ -32,18 +33,7 @@ import {
   tagline,
   wordmark,
 } from './App.styles';
-import { downloadZip } from 'client-zip';
 import { type DroppedFile, DropZone } from './DropZone';
-import { framedName, stringifyError, uint8ToBuffer } from './lib/format';
-import {
-  LONG_EDGE_OPTIONS,
-  type LongEdgeKey,
-  longEdgeKeyFor,
-  PRESETS,
-  type PresetKey,
-  sourceLongEdgeOf,
-} from './lib/long-edge';
-import { ALL_VARIANTS, type VariantKey, variantKey } from './lib/variants';
 import {
   type BatchItem,
   type BatchResult,
@@ -61,6 +51,24 @@ import {
   type WorkerRequest,
 } from './frame-client';
 import { Gallery } from './Gallery';
+import {
+  CAPTION_MODES,
+  type CaptionMode,
+  fromCaptionMode,
+  toCaptionMode,
+} from './lib/caption-mode';
+import { containFit } from './lib/contain-fit';
+import { framedName, stringifyError, uint8ToBuffer } from './lib/format';
+import {
+  LONG_EDGE_OPTIONS,
+  type LongEdgeKey,
+  longEdgeKeyFor,
+  PRESETS,
+  type PresetKey,
+  pickAutoDemoteKey,
+  sourceLongEdgeOf,
+} from './lib/long-edge';
+import { ALL_VARIANTS, type VariantKey, variantKey } from './lib/variants';
 
 // The preview pipeline no longer caps the long edge below the
 // user's chosen `longEdge` setting — earlier passes used a
@@ -80,26 +88,10 @@ const THEMES = [
   { value: 'ink' as const, label: 'Black', description: 'Black frame, light text' },
 ] satisfies ReadonlyArray<{ value: FrameTheme; label: string; description: string }>;
 
-// The UI-facing union for the caption picker: either no caption
-// at all, or one of the two layout arrangements. We don't store
-// this directly — the existing `layout` + `showMeta` signals
-// remain the source of truth so the WASM render options struct
-// stays unchanged. The handler in `ControlsCommon` translates
-// between this UI union and the two underlying signals.
-type CaptionMode = 'off' | CaptionLayout;
-const CAPTION_MODES = [
-  { value: 'off' as const, label: 'Off', description: 'No metadata caption' },
-  { value: 'edges' as const, label: 'Edges', description: 'Four-corner liit-style layout' },
-  {
-    value: 'centered' as const,
-    label: 'Centered',
-    description: 'Both rows centred under the photo',
-  },
-] satisfies ReadonlyArray<{ value: CaptionMode; label: string; description: string }>;
-
-// Quality presets + long-edge size options now live in
-// `lib/long-edge.ts` so the tables + their helpers can be unit-
-// tested without spinning up the SolidJS reactive scope.
+// Caption mode union + bidirectional (layout, showMeta) mapping
+// live in `lib/caption-mode.ts` so the projection logic is
+// pinned by unit tests. Quality presets + long-edge size
+// options live in `lib/long-edge.ts` for the same reason.
 
 // Row state for the batch gallery. `thumbnailUrl` is the small
 // framed preview shown while the row sits queued / processing;
@@ -178,22 +170,8 @@ export const App = () => {
   // a Full-resolution output (WASM's max_long_edge is a
   // ceiling, not a target), which reads as a bug.
   createEffect(() => {
-    const src = sourceLongEdge();
-    if (src === null) return;
-    const cap = LONG_EDGE_OPTIONS[longEdge()].maxLongEdge;
-    if (cap === null || cap <= src) return;
-    // Find the largest numeric cap that still fits, or fall
-    // back to 'full' (= source-size, always valid).
-    let best: LongEdgeKey = 'full';
-    let bestCap = -1;
-    for (const k of Object.keys(LONG_EDGE_OPTIONS) as LongEdgeKey[]) {
-      const v = LONG_EDGE_OPTIONS[k].maxLongEdge;
-      if (v !== null && v <= src && v > bestCap) {
-        best = k;
-        bestCap = v;
-      }
-    }
-    setLongEdge(best);
+    const next = pickAutoDemoteKey(sourceLongEdge(), longEdge());
+    if (next !== longEdge()) setLongEdge(next);
   });
 
   const buildFrameOptions = (maxLongEdge: number | null): FrameOptionsForPrepare => ({
@@ -436,21 +414,16 @@ export const App = () => {
 
   // `frameSize` returns inline `width` / `height` strings (or
   // `null` until we have both a preview and a measured stage).
-  // Contain-fit: pick whichever of the two stage axes is the
-  // bottleneck against the source aspect, then derive the
-  // other axis from it.
+  // The contain-fit math itself lives in `lib/contain-fit.ts`
+  // so the lopsided-aspect + `Math.floor` edge cases are pinned
+  // by fast-check + named scenarios there.
   const frameSize = createMemo<{ width: string; height: string } | null>(() => {
     const px = previewPixels();
     const stage = stageSize();
-    if (!px || stage.w === 0 || stage.h === 0) return null;
-    const srcAspect = px.width / px.height;
-    // Width-driven fit: take full stage width, derive height.
-    // Height-driven fit: take full stage height, derive width.
-    // Whichever fits inside the stage on both axes wins.
-    const hIfWidthFull = stage.w / srcAspect;
-    const fitW = hIfWidthFull <= stage.h ? stage.w : stage.h * srcAspect;
-    const fitH = fitW / srcAspect;
-    return { width: `${Math.floor(fitW)}px`, height: `${Math.floor(fitH)}px` };
+    if (!px) return null;
+    const fit = containFit({ srcW: px.width, srcH: px.height, stageW: stage.w, stageH: stage.h });
+    if (!fit) return null;
+    return { width: `${fit.width}px`, height: `${fit.height}px` };
   });
 
   // ── draw effect ──────────────────────────────────────────────────
@@ -995,14 +968,11 @@ const ControlsCommon = (props: ControlsProps) => (
           label: m.label,
           title: m.description,
         }))}
-        value={props.showMeta ? props.layout : 'off'}
-        onChange={(v) => {
-          if (v === 'off') {
-            props.onShowMeta(false);
-          } else {
-            props.onShowMeta(true);
-            props.onLayout(v);
-          }
+        value={toCaptionMode({ layout: props.layout, showMeta: props.showMeta })}
+        onChange={(v: CaptionMode) => {
+          const next = fromCaptionMode(v, props.layout);
+          props.onShowMeta(next.showMeta);
+          props.onLayout(next.layout);
         }}
         ariaLabel="Caption metadata"
       />

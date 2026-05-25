@@ -59,3 +59,29 @@ export const sourceLongEdgeOf = (
   }
   return null;
 };
+
+/** Pick the appropriate Long-edge key given a measured source
+ *  size and the currently-selected key. If the selected cap is
+ *  larger than the source can deliver, snap to the largest
+ *  numeric cap that *does* fit; if even HD is larger than the
+ *  source, fall back to `'full'` (always valid — its "cap" is
+ *  null = source-size). When `sourceLongEdge` is null (= no
+ *  measured source yet) the current selection is kept as-is. */
+export const pickAutoDemoteKey = (
+  sourceLongEdge: number | null,
+  current: LongEdgeKey,
+): LongEdgeKey => {
+  if (sourceLongEdge === null) return current;
+  const cap = LONG_EDGE_OPTIONS[current].maxLongEdge;
+  if (cap === null || cap <= sourceLongEdge) return current;
+  let best: LongEdgeKey = 'full';
+  let bestCap = -1;
+  for (const k of Object.keys(LONG_EDGE_OPTIONS) as LongEdgeKey[]) {
+    const v = LONG_EDGE_OPTIONS[k].maxLongEdge;
+    if (v !== null && v <= sourceLongEdge && v > bestCap) {
+      best = k;
+      bestCap = v;
+    }
+  }
+  return best;
+};
