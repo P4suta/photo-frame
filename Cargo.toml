@@ -45,23 +45,17 @@ zune-core = "0.5"
 # uses internal worker threads on native; wasm32 falls back to
 # scalar because rayon's thread spawn isn't available — but the
 # pure-Rust SIMD (wasm SIMD-128 when enabled) still applies.
-fast_image_resize = { version = "5", default-features = false, features = [
-    "image",
-    "rayon",
-] }
+fast_image_resize = { version = "5", default-features = false, features = ["image", "rayon"] }
 # Pure-Rust JPEG encoder companion to zune-jpeg's decoder. Auto-selects
 # 4:2:0 chroma subsampling for quality < 90 (the industry-standard
 # web/SNS default — image-crate's encoder is locked to 4:4:4 which is
 # unusual for photo output). `simd` feature enables AVX2 on x86_64;
 # wasm32 falls back to scalar.
-jpeg-encoder = { version = "0.6", default-features = false, features = [
-    "std",
-    "simd",
-] }
+jpeg-encoder = { version = "0.6", default-features = false, features = ["std", "simd"] }
 kamadak-exif = "0.6"
-ab_glyph = "0.2"
-imageproc = { version = "0.26", default-features = false, features = ["text"] }
-thiserror = "2"
+ab_glyph     = "0.2"
+imageproc    = { version = "0.26", default-features = false, features = ["text"] }
+thiserror    = "2"
 # miette provides typed `Diagnostic` derivation (a richer companion to
 # thiserror) so every error variant carries a stable diagnostic code, a
 # severity, and a `help` string the CLI's renderer can show as a

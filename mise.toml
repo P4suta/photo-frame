@@ -21,6 +21,13 @@
 # parity reproducible.
 hyperfine = "latest"
 jq        = "latest"
+# taplo formats / lints every Cargo.toml + every other TOML in the
+# tree (`just fmt-check` runs `taplo fmt --check`). Listed here so
+# `mise install` on a fresh host pulls the same version CI uses —
+# without it, contributors run `cargo fmt + biome format` locally,
+# pass `just fmt-check` if taplo silently no-ops, and only learn
+# about a TOML drift when CI's `format / lint` job rejects the PR.
+taplo = "latest"
 
 # Runtime profiling: samply records perf traces and opens them in the
 # Firefox Profiler UI (works locally, no GPU dependency, no
