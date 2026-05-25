@@ -100,6 +100,13 @@ const segmentedButton = defineRecipe({
     cursor: 'pointer',
     transition: 'color 120ms ease, background 120ms ease',
     _last: { borderRight: 'none' },
+    _disabled: {
+      cursor: 'not-allowed',
+      opacity: 0.4,
+      // Cancel the hover lift so a disabled option doesn't
+      // pretend it can be selected.
+      _hover: { color: 'fg.dim', bg: 'transparent' },
+    },
   },
   variants: {
     active: {

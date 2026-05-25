@@ -5,6 +5,10 @@ import { dropZone } from '../styled-system/recipes';
 export type DroppedFile = {
   data: Uint8Array;
   name: string;
+  /** Source long-edge length in pixels — sniffed once on drop
+   *  via `createImageBitmap` so the Long-edge picker can grey
+   *  out caps the source can't reach. */
+  longEdge: number;
 };
 
 type Props = {
@@ -23,10 +27,17 @@ export const DropZone = (props: Props) => {
   const ingest = async (files: FileList | null): Promise<void> => {
     if (!files || files.length === 0) return;
     const loaded: DroppedFile[] = await Promise.all(
-      Array.from(files).map(async (file) => ({
-        data: new Uint8Array(await file.arrayBuffer()),
-        name: file.name,
-      })),
+      Array.from(files).map(async (file) => {
+        const data = new Uint8Array(await file.arrayBuffer());
+        // createImageBitmap is fast — the browser parses just
+        // the JPEG/PNG header to learn dimensions, no full
+        // decode. We `close()` immediately afterwards so the
+        // bitmap memory doesn't linger.
+        const bitmap = await createImageBitmap(new Blob([data]));
+        const longEdge = Math.max(bitmap.width, bitmap.height);
+        bitmap.close();
+        return { data, name: file.name, longEdge };
+      }),
     );
     props.onLoad(loaded);
   };

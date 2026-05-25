@@ -10,6 +10,9 @@ import {
 } from 'solid-js';
 import { appShell, button, segmentedButton } from '../styled-system/recipes';
 import {
+  advancedBody,
+  advancedGroup,
+  advancedSummary,
   appHeader,
   brand,
   controls,
@@ -218,6 +221,44 @@ export const App = () => {
   const effectiveMaxLongEdge = createMemo<number | null>(
     () => LONG_EDGE_OPTIONS[longEdge()].maxLongEdge,
   );
+
+  // The source long edge — single mode: the loaded image's
+  // measured long edge; batch mode: the smallest among the
+  // batch (so the cap won't promise more resolution than the
+  // weakest source can deliver). Null in empty mode.
+  const sourceLongEdge = createMemo<number | null>(() => {
+    const s = single();
+    if (s) return s.longEdge;
+    const files = batchFiles();
+    if (files && files.length > 0) {
+      return Math.min(...files.map((f) => f.longEdge));
+    }
+    return null;
+  });
+
+  // Auto-demote: if a Long-edge option larger than the source
+  // is currently selected, snap to the largest valid option.
+  // Without this, the user could "select 4K" and quietly get
+  // a Full-resolution output (WASM's max_long_edge is a
+  // ceiling, not a target), which reads as a bug.
+  createEffect(() => {
+    const src = sourceLongEdge();
+    if (src === null) return;
+    const cap = LONG_EDGE_OPTIONS[longEdge()].maxLongEdge;
+    if (cap === null || cap <= src) return;
+    // Find the largest numeric cap that still fits, or fall
+    // back to 'full' (= source-size, always valid).
+    let best: LongEdgeKey = 'full';
+    let bestCap = -1;
+    for (const k of Object.keys(LONG_EDGE_OPTIONS) as LongEdgeKey[]) {
+      const v = LONG_EDGE_OPTIONS[k].maxLongEdge;
+      if (v !== null && v <= src && v > bestCap) {
+        best = k;
+        bestCap = v;
+      }
+    }
+    setLongEdge(best);
+  });
 
   const buildFrameOptions = (maxLongEdge: number | null): FrameOptionsForPrepare => ({
     theme: theme(),
@@ -860,6 +901,7 @@ export const App = () => {
             onPreset={applyPreset}
             longEdge={longEdge()}
             onLongEdge={setLongEdge}
+            sourceLongEdge={sourceLongEdge()}
             theme={theme()}
             onTheme={setTheme}
             layout={layout()}
@@ -923,6 +965,9 @@ type ControlsProps = {
   onPreset: (k: PresetKey) => void;
   longEdge: LongEdgeKey;
   onLongEdge: (k: LongEdgeKey) => void;
+  /** Source image long edge — drives the Long-edge segmented's
+   *  disabled flags (caps larger than this can't be reached). */
+  sourceLongEdge: number | null;
   theme: FrameTheme;
   onTheme: (t: FrameTheme) => void;
   layout: CaptionLayout;
@@ -954,21 +999,38 @@ const ControlsCommon = (props: ControlsProps) => (
       />
     </Field>
 
-    <Field label="Long edge">
-      <Segmented
-        options={Object.entries(LONG_EDGE_OPTIONS).map(([key, info]) => ({
-          value: key as LongEdgeKey,
-          label: info.label,
-          title:
-            info.maxLongEdge === null
-              ? 'Source size unchanged'
-              : `Cap at ${info.maxLongEdge} px on the long edge`,
-        }))}
-        value={props.longEdge}
-        onChange={props.onLongEdge}
-        ariaLabel="Maximum image size"
-      />
-    </Field>
+    {/* Resolution lives behind a closed-by-default <details>
+        because Full is the right choice for almost everyone;
+        the picker is here for the minority who deliberately
+        want a smaller export. Pushing it down the visual
+        hierarchy keeps the primary controls (Preset / Theme
+        / Caption) uncluttered without hiding the feature. */}
+    <details class={advancedGroup}>
+      <summary class={advancedSummary}>Resolution</summary>
+      <div class={advancedBody}>
+        <Field label="Long edge">
+          <Segmented
+            options={Object.entries(LONG_EDGE_OPTIONS).map(([key, info]) => {
+              const src = props.sourceLongEdge;
+              const oversize = info.maxLongEdge !== null && src !== null && info.maxLongEdge > src;
+              return {
+                value: key as LongEdgeKey,
+                label: info.label,
+                title: oversize
+                  ? `Source is only ${src} px on the long edge — ${info.maxLongEdge} px would be a no-op`
+                  : info.maxLongEdge === null
+                    ? 'Source size unchanged'
+                    : `Cap at ${info.maxLongEdge} px on the long edge`,
+                disabled: oversize,
+              };
+            })}
+            value={props.longEdge}
+            onChange={props.onLongEdge}
+            ariaLabel="Maximum image size"
+          />
+        </Field>
+      </div>
+    </details>
 
     <Field label="Background color">
       <Segmented
@@ -1015,7 +1077,12 @@ const Field = (props: { label: string; children: unknown }) => (
   </div>
 );
 
-type SegmentedOption<T extends string> = { value: T; label: string; title?: string };
+type SegmentedOption<T extends string> = {
+  value: T;
+  label: string;
+  title?: string;
+  disabled?: boolean;
+};
 
 const Segmented = <T extends string>(props: {
   options: SegmentedOption<T>[];
@@ -1032,6 +1099,7 @@ const Segmented = <T extends string>(props: {
           role="radio"
           aria-checked={props.value === opt.value}
           title={opt.title}
+          disabled={opt.disabled}
           class={segmentedButton({ active: props.value === opt.value })}
           onClick={() => props.onChange(opt.value)}
         >
