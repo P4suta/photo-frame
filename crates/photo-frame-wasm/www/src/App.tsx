@@ -71,14 +71,22 @@ const THEMES = [
   { value: 'ink' as const, label: 'Ink', description: 'Soft-black frame, light text' },
 ] satisfies ReadonlyArray<{ value: FrameTheme; label: string; description: string }>;
 
-const LAYOUTS = [
+// The UI-facing union for the caption picker: either no caption
+// at all, or one of the two layout arrangements. We don't store
+// this directly — the existing `layout` + `showMeta` signals
+// remain the source of truth so the WASM render options struct
+// stays unchanged. The handler in `ControlsCommon` translates
+// between this UI union and the two underlying signals.
+type CaptionMode = 'off' | CaptionLayout;
+const CAPTION_MODES = [
+  { value: 'off' as const, label: 'Off', description: 'No metadata caption' },
   { value: 'edges' as const, label: 'Edges', description: 'Four-corner liit-style layout' },
   {
     value: 'centered' as const,
     label: 'Centered',
     description: 'Both rows centred under the photo',
   },
-] satisfies ReadonlyArray<{ value: CaptionLayout; label: string; description: string }>;
+] satisfies ReadonlyArray<{ value: CaptionMode; label: string; description: string }>;
 
 /**
  * Mirror of `photo_frame::QualityPreset` — keep in sync with
@@ -877,24 +885,31 @@ const ControlsCommon = (props: ControlsProps) => (
       />
     </Field>
 
-    <Field label="Layout">
+    {/* Caption is a single 3-state choice rather than the prior
+        "Layout" picker + "Show metadata" checkbox: when there's
+        no caption, the layout picker has nothing to arrange, so
+        a disabled/hidden control was always going to be a kludge.
+        Folding the two into one segmented makes the dependency
+        explicit — `Off` is its own state, the other two imply
+        "show + arrange this way". */}
+    <Field label="Caption">
       <Segmented
-        options={LAYOUTS.map((l) => ({ value: l.value, label: l.label, title: l.description }))}
-        value={props.layout}
-        onChange={props.onLayout}
-        ariaLabel="Caption layout"
+        options={CAPTION_MODES.map((m) => ({
+          value: m.value,
+          label: m.label,
+          title: m.description,
+        }))}
+        value={props.showMeta ? props.layout : 'off'}
+        onChange={(v) => {
+          if (v === 'off') {
+            props.onShowMeta(false);
+          } else {
+            props.onShowMeta(true);
+            props.onLayout(v);
+          }
+        }}
+        ariaLabel="Caption metadata"
       />
-    </Field>
-
-    <Field label="Metadata">
-      <label class={checkInline}>
-        <input
-          type="checkbox"
-          checked={props.showMeta}
-          onChange={(event) => props.onShowMeta(event.currentTarget.checked)}
-        />
-        <span>Show below frame</span>
-      </label>
     </Field>
   </div>
 );
