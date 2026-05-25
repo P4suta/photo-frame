@@ -8,7 +8,8 @@
       "!**/dist",
       "!**/target",
       "!**/.vite",
-      "!**/coverage"
+      "!**/coverage",
+      "!**/styled-system"
     ]
   },
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
@@ -44,6 +45,17 @@
       "trailingCommas": "all",
       "arrowParentheses": "always"
     }
+  },
+  "css": {
+    "formatter": {
+      "enabled": true,
+      "indentStyle": "space",
+      "indentWidth": 2,
+      "lineWidth": 100,
+      "quoteStyle": "double"
+    },
+    "linter": { "enabled": true },
+    "parser": { "cssModules": false }
   },
   "assist": { "actions": { "source": { "organizeImports": "on" } } }
 }

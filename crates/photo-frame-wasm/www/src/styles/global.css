@@ -1,0 +1,40 @@
+/* photo-frame web UI global cascade — the only hand-written CSS file
+   left after the Panda migration. Carries three concerns Panda can't
+   own naturally:
+
+     1. `@layer` declaration — establishes the cascade ordering Panda
+        emits its layers into (reset → base → tokens → recipes →
+        utilities). Without this, custom CSS could land above Panda's
+        emitted layers and clobber tokens unpredictably.
+     2. `@font-face` for Geist — the WASM-side renderer bakes the same
+        font into framed captions, so we need it loaded in the page
+        too. Panda has no native @font-face primitive; carrying it in
+        config would only move the same declaration somewhere harder
+        to discover during asset audits.
+     3. Panda's `@layer reset / base / tokens / recipes / utilities`
+        directives — Panda emits everything else (tokens, preflight,
+        recipes, atomic css()) from this entry point.
+
+   Imported once from `src/main.tsx`. */
+
+/* The single @layer directive tells the Panda PostCSS plugin to
+   inject the compiled cascade here (reset → base → tokens → recipes
+   → utilities). It's the only Panda contact point this file has;
+   everything below is plain CSS that lives in the page cascade. */
+@layer reset, base, tokens, recipes, utilities;
+
+@font-face {
+  font-family: "Geist";
+  src: url("/fonts/Geist/Geist-Regular.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist";
+  src: url("/fonts/Geist/Geist-Medium.otf") format("opentype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}

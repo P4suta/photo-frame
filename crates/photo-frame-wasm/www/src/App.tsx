@@ -1,4 +1,33 @@
 import { createEffect, createMemo, createSignal, For, on, onCleanup, Show } from 'solid-js';
+import { appShell, button, segmentedButton } from '../styled-system/recipes';
+import {
+  appHeader,
+  brand,
+  checkInline,
+  controls,
+  field,
+  fieldBody,
+  fieldLabel,
+  headerStatus,
+  meter,
+  meterLabel,
+  meterRow,
+  meterValue,
+  previewCanvas,
+  resizeRow,
+  segmented,
+  sidebar,
+  sidebarFooter,
+  sliderRow,
+  sliderValue,
+  stage,
+  stageBatch,
+  stageCanvas,
+  stageEmpty,
+  suffix,
+  tagline,
+  wordmark,
+} from './App.styles';
 import { type DroppedFile, DropZone } from './DropZone';
 import {
   type BatchItem,
@@ -8,6 +37,7 @@ import {
   encodeJpeg,
   type FrameOptionsForPrepare,
   type FrameTheme,
+  generateThumbnailBlob,
   getWorker,
   type PipelineOptions,
   type PreparedPixels,
@@ -15,6 +45,7 @@ import {
   type WorkerReply,
   type WorkerRequest,
 } from './frame-client';
+import { Gallery } from './Gallery';
 
 const PREVIEW_LONG_EDGE = 1600;
 // Phase G1 dropped the prepare-side debounce entirely: the WASM
@@ -53,13 +84,26 @@ const PRESETS = {
 
 type PresetKey = keyof typeof PRESETS;
 
+// Row state for the batch gallery. `thumbnailUrl` is the small
+// framed preview shown while the row sits queued / processing;
+// `resultUrl` is the full-resolution JPEG that lets the card
+// double as a download trigger once the row reaches `done`.
 type BatchRow = {
   key: string;
   name: string;
   status: 'queued' | 'processing' | 'done' | 'error';
-  blobUrl?: string;
+  thumbnailUrl?: string;
+  resultUrl?: string;
   message?: string;
 };
+
+// Thumbnail long-edge cap — small enough to render quickly, large
+// enough to read the framing geometry on a `phi.6`-min-width card.
+const THUMBNAIL_LONG_EDGE = 320;
+// Debounce window for thumbnail regeneration on theme/layout/
+// show_meta toggles. Mirrors `ESTIMATE_DEBOUNCE_MS` rationale —
+// the user often drags through preset states before settling.
+const THUMBNAIL_DEBOUNCE_MS = 320;
 
 type Mode = 'empty' | 'single' | 'batch';
 
@@ -151,19 +195,26 @@ export const App = () => {
     jpeg_quality: quality(),
   });
 
-  const onDrop = (files: DroppedFile[]): void => {
+  // Reset every transient piece of state to the empty drop-zone
+  // view. Shared between `onDrop` (which then sets the new files)
+  // and `resetToEmpty` (called by the brand wordmark link).
+  const clearSession = (): void => {
     revokeAllBatchUrls();
     setPreviewVariants(new Map());
     setPreviewSize(null);
     setPreviewElapsedMs(null);
     setStatus('');
+    setSingle(null);
+    setBatchFiles(null);
+    setBatchRows([]);
+  };
+
+  const onDrop = (files: DroppedFile[]): void => {
+    clearSession();
     const [first] = files;
     if (files.length === 1 && first) {
-      setBatchFiles(null);
-      setBatchRows([]);
       setSingle(first);
     } else {
-      setSingle(null);
       setBatchFiles(files);
       setBatchRows(
         files.map((f) => ({
@@ -175,9 +226,15 @@ export const App = () => {
     }
   };
 
+  // Wordmark / brand-home click target.
+  const resetToEmpty = (): void => {
+    clearSession();
+  };
+
   const revokeAllBatchUrls = (): void => {
     for (const row of batchRows()) {
-      if (row.blobUrl) URL.revokeObjectURL(row.blobUrl);
+      if (row.thumbnailUrl) URL.revokeObjectURL(row.thumbnailUrl);
+      if (row.resultUrl) URL.revokeObjectURL(row.resultUrl);
     }
   };
 
@@ -396,12 +453,105 @@ export const App = () => {
     ),
   );
 
+  // ── batch thumbnail effect ───────────────────────────────────────
+  //
+  // Generate framed-preview thumbnails for every batch row whenever
+  // the batch scope (file set) or the frame settings change. Runs
+  // sequentially through the worker queue (WASM's photo cache
+  // amortises decode across thumbnails for the same source), so a
+  // 30-file batch costs roughly N · (decode-once + frame-stage)
+  // not N · 2 decode passes.
+  //
+  // A `generation` counter invalidates in-flight thumbnails when
+  // the user drops a new batch or toggles settings — stale promises
+  // resolve into a no-op instead of writing the wrong preview into
+  // the wrong row.
+  let thumbnailGeneration = 0;
+  let thumbnailDebounce: ReturnType<typeof setTimeout> | null = null;
+  createEffect(
+    on(
+      () => {
+        const files = batchFiles();
+        if (!files) return null;
+        // Track the settings that affect thumbnail rendering — when
+        // any of these change we re-generate the previews.
+        return {
+          files,
+          theme: theme(),
+          layout: layout(),
+          showMeta: showMeta(),
+        };
+      },
+      (scope) => {
+        if (thumbnailDebounce !== null) clearTimeout(thumbnailDebounce);
+        if (!scope) return;
+        thumbnailDebounce = setTimeout(() => {
+          thumbnailDebounce = null;
+          void regenerateBatchThumbnails(scope.files, {
+            theme: scope.theme,
+            layout: scope.layout,
+            show_meta: scope.showMeta,
+          });
+        }, THUMBNAIL_DEBOUNCE_MS);
+      },
+    ),
+  );
+
+  const regenerateBatchThumbnails = async (
+    files: DroppedFile[],
+    options: Omit<FrameOptionsForPrepare, 'max_long_edge'>,
+  ): Promise<void> => {
+    thumbnailGeneration += 1;
+    const gen = thumbnailGeneration;
+    // Revoke previous thumbnails and clear the field on every row so
+    // the gallery shows pulsing placeholders again immediately.
+    setBatchRows((rows) => {
+      for (const r of rows) {
+        if (r.thumbnailUrl) URL.revokeObjectURL(r.thumbnailUrl);
+      }
+      // Destructure to *omit* `thumbnailUrl` rather than set it to
+      // `undefined` — `exactOptionalPropertyTypes` is on in
+      // tsconfig, so the two aren't interchangeable.
+      return rows.map(({ thumbnailUrl: _, ...rest }) => rest);
+    });
+    for (const file of files) {
+      if (gen !== thumbnailGeneration) return;
+      try {
+        const blob = await generateThumbnailBlob(file.data, options, THUMBNAIL_LONG_EDGE);
+        if (gen !== thumbnailGeneration) return;
+        const url = URL.createObjectURL(blob);
+        setBatchRows((rows) =>
+          rows.map((r) => {
+            if (r.key !== file.name) return r;
+            // Defensive: if a newer generation already wrote a
+            // thumbnail for this row, revoke our late arrival.
+            if (r.thumbnailUrl && gen !== thumbnailGeneration) {
+              URL.revokeObjectURL(url);
+              return r;
+            }
+            if (r.thumbnailUrl) URL.revokeObjectURL(r.thumbnailUrl);
+            return { ...r, thumbnailUrl: url };
+          }),
+        );
+      } catch (error) {
+        if (gen !== thumbnailGeneration) return;
+        // Thumbnail failure is non-fatal — the gallery keeps the
+        // placeholder visible. Surface the error so it's not silent
+        // (memory: "production error handling — no silent fallbacks").
+        // biome-ignore lint/suspicious/noConsole: thumbnail failure diagnostic
+        console.warn('thumbnail generation failed', file.name, error);
+      }
+    }
+  };
+
   onCleanup(() => {
     if (estimateTimer !== null) clearTimeout(estimateTimer);
+    if (thumbnailDebounce !== null) clearTimeout(thumbnailDebounce);
     // Phase G2 — bumping the generation invalidates any in-flight
     // prepare/prefetch promises so their completion handlers can't
     // touch the (about-to-be-disposed) signal.
     prepareGeneration += 1;
+    thumbnailGeneration += 1;
     revokeAllBatchUrls();
     disposeWorker();
   });
@@ -478,7 +628,7 @@ export const App = () => {
         if (match.ok) {
           const blob = new Blob([uint8ToBuffer(match.result)], { type: 'image/jpeg' });
           const url = URL.createObjectURL(blob);
-          return { ...r, status: 'done', blobUrl: url, message: `${match.elapsed_ms} ms` };
+          return { ...r, status: 'done', resultUrl: url, message: `${match.elapsed_ms} ms` };
         }
         return { ...r, status: 'error', message: match.result };
       }),
@@ -486,63 +636,60 @@ export const App = () => {
   };
 
   const onDownloadRow = (row: BatchRow): void => {
-    if (!row.blobUrl) return;
+    if (!row.resultUrl) return;
     const anchor = document.createElement('a');
-    anchor.href = row.blobUrl;
+    anchor.href = row.resultUrl;
     anchor.download = framedName(row.name);
     anchor.click();
   };
 
   // ── render ───────────────────────────────────────────────────────
   return (
-    <div class="app-shell" classList={{ [`mode-${mode()}`]: true }}>
-      <header class="app-header">
-        <div class="brand">
-          <span class="wordmark">photo-frame</span>
-          <span class="tagline">Liit-style golden-ratio framing, in your browser.</span>
+    <div class={appShell({ mode: mode() })}>
+      <header class={appHeader}>
+        <div class={brand}>
+          <button
+            type="button"
+            class={wordmark}
+            // Empty mode: nothing to reset. Disabling removes the
+            // hover affordance and stops keyboard focus from
+            // landing on an inert action.
+            disabled={mode() === 'empty'}
+            aria-label="Start over"
+            title={mode() === 'empty' ? undefined : 'Start over'}
+            onClick={resetToEmpty}
+          >
+            photo-frame
+          </button>
+          <span class={tagline}>Liit-style golden-ratio framing, in your browser.</span>
         </div>
-        <div class="header-status" aria-live="polite">
+        <div class={headerStatus} aria-live="polite">
           {status()}
         </div>
       </header>
 
-      <main class="stage">
+      <main class={stage}>
         <Show when={mode() === 'empty'}>
-          <div class="stage-empty">
+          <div class={stageEmpty}>
             <DropZone onLoad={onDrop} />
           </div>
         </Show>
 
         <Show when={mode() === 'single'}>
-          <div class="stage-canvas">
-            <canvas ref={canvasRef} class="preview-canvas" />
+          <div class={stageCanvas}>
+            <canvas ref={canvasRef} class={previewCanvas} />
           </div>
         </Show>
 
         <Show when={mode() === 'batch'}>
-          <div class="stage-batch">
-            <ul class="batch-list">
-              <For each={batchRows()}>
-                {(row) => (
-                  <li classList={{ row: true, [row.status]: true }}>
-                    <span class="batch-name">{row.name}</span>
-                    <span class="batch-status">{row.status}</span>
-                    <span class="batch-meta">{row.message ?? ''}</span>
-                    <Show when={row.status === 'done'}>
-                      <button type="button" class="ghost" onClick={() => onDownloadRow(row)}>
-                        Save
-                      </button>
-                    </Show>
-                  </li>
-                )}
-              </For>
-            </ul>
+          <div class={stageBatch}>
+            <Gallery rows={batchRows()} onDownload={onDownloadRow} />
           </div>
         </Show>
       </main>
 
       <Show when={mode() !== 'empty'}>
-        <aside class="sidebar">
+        <aside class={sidebar}>
           <ControlsCommon
             preset={preset()}
             onPreset={applyPreset}
@@ -561,19 +708,19 @@ export const App = () => {
           />
 
           <Show when={mode() === 'single'}>
-            <div class="meter">
-              <div class="meter-row">
-                <span class="meter-label">Estimated size</span>
-                <span class="meter-value">{formatBytes(previewSize())}</span>
+            <div class={meter}>
+              <div class={meterRow}>
+                <span class={meterLabel}>Estimated size</span>
+                <span class={meterValue}>{formatBytes(previewSize())}</span>
               </div>
-              <div class="meter-row">
-                <span class="meter-label">Render</span>
-                <span class="meter-value">{formatMs(previewElapsedMs())}</span>
+              <div class={meterRow}>
+                <span class={meterLabel}>Render</span>
+                <span class={meterValue}>{formatMs(previewElapsedMs())}</span>
               </div>
             </div>
             <button
               type="button"
-              class="primary"
+              class={button({ intent: 'primary' })}
               disabled={busy()}
               onClick={() => void onDownloadSingle()}
             >
@@ -582,12 +729,17 @@ export const App = () => {
           </Show>
 
           <Show when={mode() === 'batch'}>
-            <button type="button" class="primary" disabled={batchBusy()} onClick={onProcessBatch}>
+            <button
+              type="button"
+              class={button({ intent: 'primary' })}
+              disabled={batchBusy()}
+              onClick={onProcessBatch}
+            >
               {batchBusy() ? 'Processing…' : `Process ${batchRows().length} files`}
             </button>
           </Show>
 
-          <footer class="sidebar-footer">
+          <footer class={sidebarFooter}>
             <a href="https://github.com/P4suta/photo-frame">Source</a> ·{' '}
             <a href="https://github.com/vercel/geist-font">Geist Sans</a> (
             <a href="fonts/Geist/OFL.txt">OFL 1.1</a>)
@@ -616,7 +768,7 @@ type ControlsProps = {
 };
 
 const ControlsCommon = (props: ControlsProps) => (
-  <div class="controls">
+  <div class={controls}>
     <Field label="Preset">
       <Segmented
         options={Object.entries(PRESETS).map(([key, info]) => ({
@@ -630,7 +782,7 @@ const ControlsCommon = (props: ControlsProps) => (
     </Field>
 
     <Field label="Quality">
-      <div class="slider-row">
+      <div class={sliderRow}>
         <input
           type="range"
           min={1}
@@ -638,13 +790,13 @@ const ControlsCommon = (props: ControlsProps) => (
           value={props.quality}
           onInput={(event) => props.onQuality(Number(event.currentTarget.value))}
         />
-        <output class="slider-value">{props.quality}</output>
+        <output class={sliderValue}>{props.quality}</output>
       </div>
     </Field>
 
     <Field label="Long edge">
-      <div class="resize-row">
-        <label class="check-inline">
+      <div class={resizeRow}>
+        <label class={checkInline}>
           <input
             type="checkbox"
             checked={props.resize}
@@ -661,7 +813,7 @@ const ControlsCommon = (props: ControlsProps) => (
           disabled={!props.resize}
           onInput={(event) => props.onResizePx(Number(event.currentTarget.value) || 1)}
         />
-        <span class="suffix">px</span>
+        <span class={suffix}>px</span>
       </div>
     </Field>
 
@@ -684,7 +836,7 @@ const ControlsCommon = (props: ControlsProps) => (
     </Field>
 
     <Field label="Metadata">
-      <label class="check-inline">
+      <label class={checkInline}>
         <input
           type="checkbox"
           checked={props.showMeta}
@@ -697,9 +849,9 @@ const ControlsCommon = (props: ControlsProps) => (
 );
 
 const Field = (props: { label: string; children: unknown }) => (
-  <div class="field">
-    <div class="field-label">{props.label}</div>
-    <div class="field-body">{props.children as never}</div>
+  <div class={field}>
+    <div class={fieldLabel}>{props.label}</div>
+    <div class={fieldBody}>{props.children as never}</div>
   </div>
 );
 
@@ -711,7 +863,7 @@ const Segmented = <T extends string>(props: {
   onChange: (v: T) => void;
   ariaLabel: string;
 }) => (
-  <div class="segmented" role="radiogroup" aria-label={props.ariaLabel}>
+  <div class={segmented} role="radiogroup" aria-label={props.ariaLabel}>
     <For each={props.options}>
       {(opt) => (
         // biome-ignore lint/a11y/useSemanticElements: segmented buttons keep custom styling; native radios would lose the cohesive look used across the sidebar.
@@ -720,7 +872,7 @@ const Segmented = <T extends string>(props: {
           role="radio"
           aria-checked={props.value === opt.value}
           title={opt.title}
-          classList={{ active: props.value === opt.value }}
+          class={segmentedButton({ active: props.value === opt.value })}
           onClick={() => props.onChange(opt.value)}
         >
           {opt.label}

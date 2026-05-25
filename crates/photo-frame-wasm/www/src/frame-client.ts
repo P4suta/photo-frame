@@ -165,6 +165,31 @@ export const encodeJpeg = async (
 };
 
 /**
+ * Render a low-resolution framed JPEG of `bytes` at the caller's
+ * `longEdge` cap, suitable for a batch-card thumbnail. Combines the
+ * existing `preparePixels` (render + downscale) and `encodeJpeg`
+ * (encode at modest quality) into a single Promise returning a
+ * `Blob` the caller can hand to `URL.createObjectURL()`.
+ *
+ * The WASM-side photograph cache (`cached_or_decode` in `lib.rs`)
+ * makes the thumbnail and the eventual full-resolution pass share
+ * one decode — generating thumbnails for an N-file batch costs N
+ * decodes plus 2N frame stages, not 2N decodes.
+ */
+export const generateThumbnailBlob = async (
+  bytes: Uint8Array,
+  options: Omit<FrameOptionsForPrepare, 'max_long_edge'>,
+  longEdge: number,
+  quality = 70,
+): Promise<Blob> => {
+  const pixels = await preparePixels(bytes, { ...options, max_long_edge: longEdge });
+  const jpeg = await encodeJpeg(pixels.rgba, pixels.width, pixels.height, quality);
+  const buffer = new ArrayBuffer(jpeg.byteLength);
+  new Uint8Array(buffer).set(jpeg);
+  return new Blob([buffer], { type: 'image/jpeg' });
+};
+
+/**
  * Run a batch through the worker's `frame_batch` entry. Re-exported for
  * `App.tsx` to consume; the worker's per-item progress events arrive on
  * the same channel and the caller listens for them directly to update

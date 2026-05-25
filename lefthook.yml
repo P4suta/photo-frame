@@ -18,9 +18,15 @@ pre-commit:
     fmt-rust:
       glob: '*.rs'
       run: cargo fmt --all -- --check
+    # biome (formatter + linter) lives only inside the dev container —
+    # the host has no global biome and the web package.json doesn't
+    # depend on @biomejs/biome either. Route the hook through
+    # `docker compose exec` so a host-side `git commit` still hits
+    # the same biome the container/CI uses. Requires the dev service
+    # to be running: `docker compose up -d dev`.
     fmt-ts:
-      glob: '*.{ts,tsx,js,jsx,json,jsonc}'
-      run: biome format {staged_files}
+      glob: '*.{ts,tsx,js,jsx,json,jsonc,css}'
+      run: docker compose exec -T dev biome format {staged_files}
     fmt-toml:
       glob: '*.toml'
       run: taplo fmt --check {staged_files}
@@ -30,8 +36,16 @@ pre-commit:
       # lefthook's structured output rendering.
       run: typos --quiet
     lint-ts:
-      glob: '*.{ts,tsx,js,jsx}'
-      run: biome lint {staged_files}
+      glob: '*.{ts,tsx,js,jsx,css}'
+      run: docker compose exec -T dev biome lint {staged_files}
+    # Panda generates `styled-system/` from `panda.config.ts` and the
+    # config-side modules under `panda/`. Regenerate when those change
+    # so the TS typecheck below works against fresh token / recipe
+    # types. The output is gitignored so nothing gets staged; we just
+    # make sure the local working copy stays consistent.
+    panda-codegen:
+      glob: 'crates/photo-frame-wasm/www/{panda.config.ts,panda/**}'
+      run: just panda-codegen
 
 pre-push:
   parallel: true
@@ -58,3 +72,8 @@ pre-push:
       run: just test
     wasm-build:
       run: just wasm-build
+    # The Vite/Panda chain catches token typos and recipe misuse at
+    # build time. Without this gate they'd only surface in CI, after
+    # the push has already cost a round-trip.
+    web-build:
+      run: just web-build

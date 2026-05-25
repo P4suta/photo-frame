@@ -1,4 +1,6 @@
 import { createSignal } from 'solid-js';
+import { css } from '../styled-system/css';
+import { dropZone } from '../styled-system/recipes';
 
 export type DroppedFile = {
   data: Uint8Array;
@@ -35,8 +37,7 @@ export const DropZone = (props: Props) => {
     <button
       type="button"
       id="drop-zone"
-      class="drop"
-      classList={{ over: over() }}
+      class={dropZone({ over: over() })}
       aria-label="Drop images here or press Enter to open the file picker"
       onClick={openPicker}
       onDragOver={(event) => {
@@ -50,9 +51,9 @@ export const DropZone = (props: Props) => {
         void ingest(event.dataTransfer?.files ?? null);
       }}
     >
-      <p>
+      <p class={paragraphCss}>
         Drop one or many JPEG/PNG images here, or{' '}
-        <span class="link">
+        <span class={linkCss}>
           browse
           <input
             ref={fileInput}
@@ -70,3 +71,12 @@ export const DropZone = (props: Props) => {
     </button>
   );
 };
+
+const paragraphCss = css({ margin: '0' });
+
+const linkCss = css({
+  color: 'fg.default',
+  cursor: 'pointer',
+  textDecoration: 'underline',
+  textUnderlineOffset: '2px',
+});

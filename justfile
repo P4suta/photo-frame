@@ -125,6 +125,15 @@ copy-coi-sw:
 # `.github/workflows/pages.yml` runs on push to main, so `just ci` catches
 # TypeScript or Vite regressions locally instead of letting Pages discover
 # them after the merge.
+# Regenerate Panda CSS's `styled-system/` package (typed tokens,
+# recipes, css() / patterns helpers) from `panda.config.ts` + the
+# config-side modules under `panda/`. Idempotent — also chained
+# from `bun run dev` / `bun run build` / `postinstall`, so the
+# manual recipe exists mainly for when you've just edited
+# panda/*.ts and want fresh types in your editor before saving.
+panda-codegen:
+    cd crates/photo-frame-wasm/www && bun run panda codegen
+
 web-build: wasm-build copy-web-fonts
     cd crates/photo-frame-wasm/www && bun install --frozen-lockfile
     just copy-coi-sw
