@@ -51,13 +51,25 @@ jobs:
           components: clippy, rustfmt
           targets: wasm32-unknown-unknown
 
+      # `sccache` caches rustc invocations across runs *and* across
+      # jobs in the same workflow. The Swatinem step below keeps
+      # `target/` warm between PR pushes; sccache on top means even
+      # a cold target/ rehydrates compilation from GitHub Actions
+      # cache. The combination drops cold-cache compile time by
+      # roughly 2–5× depending on which deps were touched.
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Wire sccache into rustc
+        run: |
+          echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+          echo 'SCCACHE_GHA_ENABLED=true' >> "$GITHUB_ENV"
+
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: lint
-          # Don't repopulate the cache on a hit — the lint job's
-          # workspace artefacts are small and rarely-changing.
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
+          # Save on PRs too — `Swatinem` is intra-PR-rerun fast even
+          # without main warmth, and sccache amortises cross-job
+          # compilation independently. Without this, a long-lived PR
+          # eats the full cold-cache cost on every push.
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
@@ -84,17 +96,33 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Wire sccache into rustc
+        run: |
+          echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+          echo 'SCCACHE_GHA_ENABLED=true' >> "$GITHUB_ENV"
+
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: test
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
+          # Save on PRs too so subsequent pushes to the same PR are
+          # warm. sccache handles cross-PR sharing on top.
       - uses: taiki-e/install-action@v2
         with:
           tool: just,cargo-nextest
 
+      # `--tests --bins --lib` instead of `--all-targets` — drops
+      # the bench crate (`photo-frame-bench`) from compilation here.
+      # nextest's `default-filter = "not kind(bench)"` was already
+      # skipping bench *execution*, but compilation still happened
+      # under `--all-targets`. The bench crate pulls iai-callgrind,
+      # divan, fast_image_resize-bench-deps, etc. — ~30 s of cold-
+      # cache compile each CI run. Bench code is linted by the
+      # `format-lint` job (`cargo clippy --workspace --all-targets`)
+      # and exercised by `runtime-bench.yml`, so coverage is
+      # preserved.
       - name: nextest (ci profile)
-        run: cargo nextest run --workspace --all-targets --profile ci
+        run: cargo nextest run --workspace --lib --bins --tests --profile ci
 
       - name: doc tests
         run: cargo test --workspace --doc --no-fail-fast
@@ -126,10 +154,15 @@ jobs:
           targets: wasm32-unknown-unknown
           components: rust-src
 
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Wire sccache into rustc
+        run: |
+          echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+          echo 'SCCACHE_GHA_ENABLED=true' >> "$GITHUB_ENV"
+
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: wasm-nightly
-          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - uses: taiki-e/install-action@v2
         with:
