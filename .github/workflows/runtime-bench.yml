@@ -115,7 +115,25 @@ jobs:
       - name: Install iai-callgrind-runner
         run: cargo binstall --no-confirm iai-callgrind-runner
 
+      - name: Detect whether the base commit carries the icount harness
+        # The icount.rs file was added in the same Phase A commit that
+        # introduced this workflow. PRs whose merge base predates that
+        # commit can't be compared (no baseline to save against). For
+        # those, we skip the baseline step and only verify the PR-head
+        # icount harness runs. Subsequent PRs (whose base does have
+        # icount) get the real gate.
+        id: base_has_icount
+        run: |
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          if git show "${BASE_SHA}:crates/photo-frame-bench/benches/icount.rs" > /dev/null 2>&1; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "Base commit ${BASE_SHA} pre-dates the icount harness — skipping baseline comparison for this PR."
+          fi
+
       - name: Baseline run on PR's merge base
+        if: steps.base_has_icount.outputs.present == 'true'
         # `--save-baseline=main` writes target/iai/.../main/ which the
         # comparison step below reads. `=` form is mandatory — the
         # runner's clap config sets `require_equals = true` on this arg.
@@ -126,6 +144,7 @@ jobs:
           just bench-icount --save-baseline=main
 
       - name: PR run with regression gate
+        if: steps.base_has_icount.outputs.present == 'true'
         # `--baseline=main` reads the saved baseline and compares.
         # `--callgrind-limits='ir=5%'` sets the regression threshold:
         # any bench case whose Ir (instructions retired) grows by more
@@ -137,3 +156,12 @@ jobs:
             --baseline=main \
             --callgrind-limits='ir=5%' \
             --regression-fail-fast
+
+      - name: PR-only icount sanity (no baseline available)
+        if: steps.base_has_icount.outputs.present == 'false'
+        # No baseline exists — just verify the icount harness compiles
+        # and runs on the PR HEAD. Subsequent PRs will pick up the
+        # comparison flow above once main carries the harness.
+        run: |
+          set -e
+          just bench-icount
