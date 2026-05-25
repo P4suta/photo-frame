@@ -1,15 +1,6 @@
 import { downloadZip } from 'client-zip';
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  For,
-  on,
-  onCleanup,
-  onMount,
-  Show,
-} from 'solid-js';
-import { appShell, button, segmentedButton } from '../styled-system/recipes';
+import { createEffect, createMemo, createSignal, on, onCleanup, onMount, Show } from 'solid-js';
+import { appShell, button } from '../styled-system/recipes';
 import {
   advancedBody,
   advancedGroup,
@@ -17,13 +8,9 @@ import {
   appHeader,
   brand,
   controls,
-  field,
-  fieldBody,
-  fieldLabel,
   headerStatus,
   previewCanvas,
   previewFrame,
-  segmented,
   sidebar,
   sidebarFooter,
   stage,
@@ -33,6 +20,7 @@ import {
   tagline,
   wordmark,
 } from './App.styles';
+import { Field, Segmented } from './components/Segmented';
 import { type DroppedFile, DropZone } from './DropZone';
 import {
   type BatchItem,
@@ -979,45 +967,9 @@ const ControlsCommon = (props: ControlsProps) => (
   </div>
 );
 
-const Field = (props: { label: string; children: unknown }) => (
-  <div class={field}>
-    <div class={fieldLabel}>{props.label}</div>
-    <div class={fieldBody}>{props.children as never}</div>
-  </div>
-);
-
-type SegmentedOption<T extends string> = {
-  value: T;
-  label: string;
-  title?: string;
-  disabled?: boolean;
-};
-
-const Segmented = <T extends string>(props: {
-  options: SegmentedOption<T>[];
-  value: T;
-  onChange: (v: T) => void;
-  ariaLabel: string;
-}) => (
-  <div class={segmented} role="radiogroup" aria-label={props.ariaLabel}>
-    <For each={props.options}>
-      {(opt) => (
-        // biome-ignore lint/a11y/useSemanticElements: segmented buttons keep custom styling; native radios would lose the cohesive look used across the sidebar.
-        <button
-          type="button"
-          role="radio"
-          aria-checked={props.value === opt.value}
-          title={opt.title}
-          disabled={opt.disabled}
-          class={segmentedButton({ active: props.value === opt.value })}
-          onClick={() => props.onChange(opt.value)}
-        >
-          {opt.label}
-        </button>
-      )}
-    </For>
-  </div>
-);
+// `Segmented` + `Field` live in `components/Segmented.tsx` so
+// the picker behaviour (aria-checked, disabled, click events)
+// can be tested under `@solidjs/testing-library`.
 
 // `framedName`, `uint8ToBuffer`, and `stringifyError` now live
 // in `lib/format.ts`; only the DOM-touching `triggerDownload`
