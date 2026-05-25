@@ -69,11 +69,8 @@ type Mode = 'empty' | 'single' | 'batch';
 // enumerates the 8 combinations so the prefetch loop has a fixed
 // iteration order (deterministic, easier to debug).
 type VariantKey = string;
-const variantKey = (
-  theme: FrameTheme,
-  layout: CaptionLayout,
-  showMeta: boolean,
-): VariantKey => `${theme}|${layout}|${showMeta}`;
+const variantKey = (theme: FrameTheme, layout: CaptionLayout, showMeta: boolean): VariantKey =>
+  `${theme}|${layout}|${showMeta}`;
 const ALL_VARIANTS: ReadonlyArray<{
   theme: FrameTheme;
   layout: CaptionLayout;
@@ -219,7 +216,8 @@ export const App = () => {
         prepareGeneration += 1;
         const gen = prepareGeneration;
         setPreviewVariants(new Map());
-        const maxLongEdge = scope.maxLongEdge === Number.POSITIVE_INFINITY ? null : scope.maxLongEdge;
+        const maxLongEdge =
+          scope.maxLongEdge === Number.POSITIVE_INFINITY ? null : scope.maxLongEdge;
         // Snapshot the user-visible variant at scope-change time —
         // we prepare this one first so the canvas updates ASAP.
         const initial = {
@@ -251,10 +249,7 @@ export const App = () => {
           theme: theme(),
           layout: layout(),
           show_meta: showMeta(),
-          max_long_edge:
-            maxLongEdge === null
-              ? null
-              : Math.min(PREVIEW_LONG_EDGE, maxLongEdge),
+          max_long_edge: maxLongEdge === null ? null : Math.min(PREVIEW_LONG_EDGE, maxLongEdge),
         };
         void runPreparePromise(current, opts, key, prepareGeneration);
       },
@@ -389,12 +384,7 @@ export const App = () => {
             // drag). Pass `intent.rgba` directly; the cached
             // `previewPixels` buffer stays intact because the worker
             // only ever receives the encodeJpeg-side copy.
-            const jpeg = await encodeJpeg(
-              intent.rgba,
-              intent.width,
-              intent.height,
-              intent.quality,
-            );
+            const jpeg = await encodeJpeg(intent.rgba, intent.width, intent.height, intent.quality);
             if (token !== estimateToken) return;
             setPreviewSize(jpeg.length);
           } catch (error) {

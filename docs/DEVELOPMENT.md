@@ -14,7 +14,11 @@ mise install
 # CLI tool the workspace needs)
 docker compose build dev
 
-# Optional: install the git hooks (fmt + clippy on commit)
+# REQUIRED: install the git hooks. Pre-commit runs `cargo fmt --check`,
+# `biome format`, `taplo fmt --check`, `typos`, and `biome lint` on
+# staged files; pre-push runs the full `just lint` + `just test` +
+# `just wasm-build`. Without this step the same checks only run in
+# CI, where a failure is a full PR round-trip to fix.
 just hooks
 ```
 

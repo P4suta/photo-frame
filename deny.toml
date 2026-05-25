@@ -59,6 +59,17 @@ allow = [
     "0BSD",
     "OFL-1.1",                        # Geist Sans bundled with photo-frame-frame
     "MPL-2.0",                        # weak-copyleft (file-level), considered compatible
+    # IJG (Independent JPEG Group) is the upstream license libjpeg has
+    # shipped under for decades. Pulled in transitively by `jpeg-encoder`
+    # (the pure-Rust SIMD encoder adopted in Phase D3), which dual-licenses
+    # under "(MIT OR Apache-2.0) AND IJG" — the IJG clause covers the
+    # Huffman table / quantization defaults that derive from libjpeg
+    # reference code. FSF-classified as Free/Libre with no copyleft and a
+    # permissive disclosure clause; obligations satisfied by shipping the
+    # license text downstream, which our dist already does via cargo's
+    # license bundling. Adding it here so the gate stops false-positiving
+    # on a routine Phase D bump.
+    "IJG",
 ]
 unused-allowed-license = "allow"
 confidence-threshold = 0.93
