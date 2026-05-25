@@ -105,7 +105,6 @@ FROM rust:${RUST_VERSION}-slim-trixie AS dev
 ENV DEBIAN_FRONTEND=noninteractive \
     CARGO_TERM_COLOR=always \
     RUSTUP_PERMIT_COPY_RENAME=1 \
-    BUN_INSTALL=/usr/local \
     PATH=/usr/local/bin:$PATH
 
 # apt: cache mounts keep the package cache + lists across rebuilds.
@@ -125,7 +124,15 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # bun (Zig-based JS runtime + package manager). Symlinking `node` → `bun`
 # so npm-published packages with `#!/usr/bin/env node` shebangs (lefthook
 # etc.) can find a runtime.
-RUN curl -fsSL https://bun.sh/install | bash \
+#
+# BUN_INSTALL is set **inline** here (not as a global ENV) so the installer
+# puts the binary at /usr/local/bin/bun. Persisting BUN_INSTALL into the
+# runtime env would make bun also derive its cache + tempdir from
+# /usr/local at runtime, which is root-owned — the dev user would then
+# fail with "tempdir: AccessDenied" the first time they ran `bun install`.
+# At runtime, with BUN_INSTALL unset, bun falls back to ~/.bun for those
+# dirs, which the dev user owns under /home/dev.
+RUN BUN_INSTALL=/usr/local bash -c 'curl -fsSL https://bun.sh/install | bash' \
  && bun --version \
  && ln -sf "$(which bun)" /usr/local/bin/node
 
@@ -167,8 +174,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
         inferno \
         iai-callgrind-runner
 
-# npm-published tooling.
-RUN bun install -g @biomejs/biome lefthook \
+# npm-published tooling. BUN_INSTALL=/usr/local routes the -g binaries
+# to /usr/local/bin (same reasoning as the bun installer above — kept
+# inline so the runtime env stays clean).
+RUN BUN_INSTALL=/usr/local bun install -g @biomejs/biome lefthook \
  && biome --version \
  && lefthook version
 
@@ -178,9 +187,20 @@ RUN bun install -g @biomejs/biome lefthook \
 # breaks `docker compose build` from bash. See docker-compose.yml.
 ARG HOST_UID=1000
 ARG HOST_GID=1000
+# Pre-create every path that docker-compose mounts a named volume at.
+# Empty volumes inherit the mount-point's ownership from the image on
+# first attach; without these mkdirs the volumes land as root:root and
+# the dev user (USER dev below) cannot write into them. The cargo
+# registry/git caches live under /home/dev/ and are covered by the
+# /home/dev chown, but /workspace/target and the node_modules cache
+# live under /workspace and need to exist before chown -R cascades.
 RUN groupadd --gid ${HOST_GID} dev \
  && useradd  --uid ${HOST_UID} --gid ${HOST_GID} --shell /bin/bash --create-home dev \
- && mkdir -p /workspace /home/dev/.cargo/registry /home/dev/.cargo/git \
+ && mkdir -p /workspace \
+             /workspace/target \
+             /workspace/crates/photo-frame-wasm/www/node_modules \
+             /home/dev/.cargo/registry \
+             /home/dev/.cargo/git \
  && chown -R dev:dev /workspace /home/dev
 
 USER dev
