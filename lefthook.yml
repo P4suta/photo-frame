@@ -34,7 +34,14 @@ pre-commit:
       # `--no-progress` was removed in typos-cli ~1.40; `--quiet` is
       # the current way to suppress the progress bar that breaks
       # lefthook's structured output rendering.
-      run: typos --quiet
+      #
+      # `--write-changes` makes typos auto-fix in place — typos has
+      # high precision and the built-in dictionary won't touch
+      # ambiguous words, so the autofix is safe to run unattended.
+      # `stage_fixed: true` then re-stages the corrected files so
+      # the commit includes the fixes instead of failing on them.
+      run: typos --quiet --write-changes {staged_files}
+      stage_fixed: true
     lint-ts:
       glob: '*.{ts,tsx,js,jsx,css}'
       run: docker compose exec -T dev biome lint {staged_files}
