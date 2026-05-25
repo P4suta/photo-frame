@@ -26,13 +26,18 @@ use crate::text::{Renderer, Weight};
         caption_visible = tracing::field::Empty,
     ),
 )]
-pub(crate) fn render(photo: &Photograph, opts: &FrameOptions) -> Pixels {
-    let upright = pixels_to_rgba_image(&photo.pixels);
+pub(crate) fn render(photo: Photograph, opts: &FrameOptions) -> Pixels {
+    // Destructure the Photograph so the pixel buffer can move into
+    // `ImageBuffer::from_raw` (zero-copy) while the provenance stays
+    // borrowed for caption formatting. Phase C1 — eliminates the 92 MB
+    // `.to_vec()` copy the v1 path paid at the renderer boundary.
+    let Photograph { pixels, provenance } = photo;
+    let upright = pixels_to_rgba_image(pixels);
     let upright = maybe_downscale(upright, opts.max_long_edge);
 
     let caption = match opts.meta_policy {
         MetaPolicy::Never => Caption::default(),
-        MetaPolicy::Auto => caption_from(&photo.provenance),
+        MetaPolicy::Auto => caption_from(&provenance),
     };
     let caption_visible = !caption.is_empty();
 
@@ -48,13 +53,15 @@ pub(crate) fn render(photo: &Photograph, opts: &FrameOptions) -> Pixels {
         .expect("geometry guarantees a positive RGBA8 canvas")
 }
 
-fn pixels_to_rgba_image(pixels: &Pixels) -> RgbaImage {
-    ImageBuffer::<Rgba<u8>, _>::from_raw(
-        pixels.width(),
-        pixels.height(),
-        pixels.as_rgba8().to_vec(),
-    )
-    .expect("Pixels invariants guarantee width * height * 4 bytes")
+/// Take ownership of the decoder's pixel buffer and reinterpret it as
+/// an `RgbaImage` without copying. `Pixels::into_parts` was designed
+/// for exactly this handoff (`crates/photo-frame-types/src/pixels.rs`)
+/// — `image::ImageBuffer::from_raw` accepts a `Vec<u8>` by move and
+/// does no further allocation.
+fn pixels_to_rgba_image(pixels: Pixels) -> RgbaImage {
+    let (width, height, data) = pixels.into_parts();
+    ImageBuffer::<Rgba<u8>, _>::from_raw(width, height, data)
+        .expect("Pixels invariants guarantee width * height * 4 bytes")
 }
 
 fn maybe_downscale(img: RgbaImage, max_long_edge: Option<u32>) -> RgbaImage {
@@ -208,7 +215,7 @@ mod tests {
     fn render_without_caption_uses_symmetric_thin_border() {
         let photo = solid_photo(200, 100, Provenance::default());
         let opts = FrameOptions::default();
-        let out = render(&photo, &opts);
+        let out = render(photo, &opts);
         // side = side_for(min(200,100)) = side_for(100) = max(round(100/φ⁶), 8) = 8
         // bottom collapses to side when caption empty → canvas = (200+16, 100+16) = (216, 116)
         assert_eq!(out.width(), 216);
@@ -226,7 +233,7 @@ mod tests {
         };
         let photo = solid_photo(200, 100, prov);
         let opts = FrameOptions::default();
-        let out = render(&photo, &opts);
+        let out = render(photo, &opts);
         // side = 8, bottom = round(8·φ²) = 21 (instead of 8 collapse) → h = 100+8+21 = 129
         assert_eq!(out.width(), 216);
         assert_eq!(out.height(), 129);
@@ -248,7 +255,7 @@ mod tests {
             meta_policy: MetaPolicy::Never,
             ..Default::default()
         };
-        let out = render(&photo, &opts);
+        let out = render(photo, &opts);
         assert_eq!(out.height(), 116, "bottom strip must collapse with Never");
     }
 
@@ -259,7 +266,7 @@ mod tests {
             max_long_edge: Some(100),
             ..Default::default()
         };
-        let out = render(&photo, &opts);
+        let out = render(photo, &opts);
         // After downscale: long edge clamped to 100, short edge halved → 100×50.
         // side_for(50) = max(round(50/φ⁶), 8) = 8 → canvas = (100+16, 50+16) = (116, 66)
         assert_eq!(out.width(), 116);
@@ -273,7 +280,7 @@ mod tests {
             max_long_edge: Some(100),
             ..Default::default()
         };
-        let out = render(&photo, &opts);
+        let out = render(photo, &opts);
         // 80x40 already <= 100 long edge: pass through.
         // side_for(40) = max(round(40/φ⁶), 8) = 8 → canvas = (80+16, 40+16) = (96, 56)
         assert_eq!(out.width(), 96);
@@ -283,7 +290,7 @@ mod tests {
     #[test]
     fn rendered_buffer_length_matches_dimensions() {
         let photo = solid_photo(80, 60, Provenance::default());
-        let out = render(&photo, &FrameOptions::default());
+        let out = render(photo, &FrameOptions::default());
         assert_eq!(
             out.as_rgba8().len(),
             (out.width() * out.height() * 4) as usize
@@ -296,7 +303,7 @@ mod tests {
         use image::Rgba;
         let photo = solid_photo(80, 60, Provenance::default());
         let out = render(
-            &photo,
+            photo,
             &FrameOptions {
                 theme: FrameTheme::Ink,
                 ..Default::default()
@@ -320,7 +327,7 @@ mod tests {
     fn paper_theme_paints_corner_pixels_with_white() {
         use image::Rgba;
         let photo = solid_photo(80, 60, Provenance::default());
-        let out = render(&photo, &FrameOptions::default());
+        let out = render(photo, &FrameOptions::default());
         let buf = out.as_rgba8();
         assert_eq!(&buf[0..4], Rgba([255, 255, 255, 255]).0.as_slice());
     }
@@ -347,7 +354,7 @@ mod tests {
             ..Default::default()
         };
         let photo = solid_photo(800, 600, prov);
-        let out = render(&photo, &FrameOptions::default());
+        let out = render(photo, &FrameOptions::default());
         // We don't pin exact dimensions here (geometry tests cover that);
         // we just verify the output is sane and the strip expanded.
         assert!(out.width() > 800);

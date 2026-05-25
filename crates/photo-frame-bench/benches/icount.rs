@@ -71,7 +71,7 @@ fn decode(bytes: Vec<u8>) {
 fn frame(bytes: Vec<u8>) {
     let photo = from_bytes(&bytes).expect("decode");
     let opts = FrameOptions::default();
-    let _ = black_box(render(&photo, &opts));
+    let _ = black_box(render(photo, &opts));
 }
 
 #[library_benchmark]
@@ -79,7 +79,7 @@ fn frame(bytes: Vec<u8>) {
 #[bench::panorama(setup = fixture_bytes_panorama)]
 fn encode_q92(bytes: Vec<u8>) {
     let photo = from_bytes(&bytes).expect("decode");
-    let pixels = render(&photo, &FrameOptions::default());
+    let pixels = render(photo, &FrameOptions::default());
     let opts = JpegOptions::default();
     let _ = black_box(jpeg(&pixels, &opts).expect("encode"));
 }

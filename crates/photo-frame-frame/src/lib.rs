@@ -21,10 +21,17 @@ pub use photo_frame_types::{Photograph, Pixels};
 
 /// Render `photo` into a framed RGBA8 grid.
 ///
-/// The result is always a valid [`Pixels`] — the geometry layer guarantees
-/// positive canvas dimensions for any non-zero input photo, and
-/// [`Photograph`] already carries a non-zero [`Pixels`].
+/// Takes `photo` by value so the decoder's pixel buffer can be moved
+/// straight into the renderer's `RgbaImage` without an intermediate
+/// copy (Phase C1). Callers that need to keep the `Photograph`
+/// around can `clone()` it explicitly before invoking — the explicit
+/// clone makes the cost visible at the call site, instead of paying
+/// for it inside the renderer where every consumer would.
+///
+/// The result is always a valid [`Pixels`] — the geometry layer
+/// guarantees positive canvas dimensions for any non-zero input
+/// photo, and [`Photograph`] already carries a non-zero [`Pixels`].
 #[must_use]
-pub fn render(photo: &Photograph, opts: &FrameOptions) -> Pixels {
+pub fn render(photo: Photograph, opts: &FrameOptions) -> Pixels {
     render::render(photo, opts)
 }

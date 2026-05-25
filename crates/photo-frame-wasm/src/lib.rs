@@ -69,7 +69,7 @@ pub fn render_pixels(bytes: &[u8], frame_options: JsValue) -> Result<JsValue, Js
 
     let photo = photo_frame::decode::from_bytes(bytes)
         .map_err(|e| JsError::new(&display_chain(&PipelineError::Decode(e))))?;
-    let framed = photo_frame::frame::render(&photo, &frame_opts);
+    let framed = photo_frame::frame::render(photo, &frame_opts);
     let (width, height, rgba) = framed.into_parts();
     tracing::Span::current().record("width", width);
     tracing::Span::current().record("height", height);

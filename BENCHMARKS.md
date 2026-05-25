@@ -233,4 +233,5 @@ same fixture × stage matrix. Negative = faster.
 | Phase | Snapshot | 24 MP real `pipeline` | 24 MP real `decode` | 24 MP real `encode` | 24 MP real `frame` | Notes |
 | --- | --- | ---: | ---: | ---: | ---: | --- |
 | baseline | `1dcbfdf` | 1.25 s | 268 ms | 819 ms | 131 ms | encode = 66 % of pipeline; rotation costs +30 % at decode |
+| C1 zero-copy `Pixels` handoff | post-C1 | **1.17 s** (-6 %) | 270 ms (noise) | 806 ms (-1.5 %) | **92 ms** (-30 %) | dhat: total alloc 535 MB → 439 MB (-97 MB ≈ one 92 MB RGBA buffer), peak 336 → 243 MB |
 
