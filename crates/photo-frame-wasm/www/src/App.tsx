@@ -494,15 +494,46 @@ export const App = () => {
     ctx.drawImage(off, dx, dy, dw, dh);
   };
 
+  // View Transitions API wrapper — Chrome 111+/Safari 18+/
+  // Firefox 132+ (~Nov 2024) implement `startViewTransition`.
+  // The browser screenshots the marked element (= the preview
+  // canvas, via `view-transition-name: preview-canvas` in
+  // App.styles.ts), runs the synchronous DOM mutation in `cb`,
+  // then GPU-crossfades the screenshot into the post-mutation
+  // state. The fallback for older engines is the hard cut we
+  // had before — which combined with the stale-while-revalidate
+  // cache below still reads as smooth, just without the fade.
+  //
+  // Each pixel-content change goes through here; size-only
+  // updates (= the `ResizeObserver` path below) intentionally
+  // bypass it so a window resize doesn't crossfade every tick.
+  const withViewTransition = (cb: () => void): void => {
+    const docVT = document as Document & {
+      startViewTransition?: (callback: () => void) => unknown;
+    };
+    if (typeof docVT.startViewTransition === 'function') {
+      docVT.startViewTransition(cb);
+    } else {
+      cb();
+    }
+  };
+
   createEffect(() => {
     // Subscribe to previewPixels (re-paints when it changes).
     previewPixels();
-    if (canvasRef) paintPreview(canvasRef);
+    if (canvasRef) {
+      const canvas = canvasRef;
+      withViewTransition(() => paintPreview(canvas));
+    }
   });
 
   onMount(() => {
     if (!canvasRef) return;
     const canvas = canvasRef;
+    // Resize re-paints are direct — wrapping them in
+    // `startViewTransition` would crossfade every observer
+    // tick, which reads as the canvas "ghosting" while the
+    // user drags the window edge.
     const ro = new ResizeObserver(() => paintPreview(canvas));
     ro.observe(canvas);
     onCleanup(() => ro.disconnect());

@@ -196,6 +196,14 @@ export const previewCanvas = css({
   border: 'soft',
   borderRadius: 'phi.m3',
   imageRendering: 'auto',
+  // Opt this canvas into the View Transitions API — the global
+  // `::view-transition-old/new(preview-canvas)` rule (see
+  // `panda/global-css.ts`) crossfades the canvas content on
+  // every paint that runs inside `document.startViewTransition`,
+  // so Preset / Resolution changes don't hard-cut. The browser
+  // GPU-composites the crossfade against the screenshot of the
+  // canvas's pre-paint state — no JS animation loop required.
+  viewTransitionName: '[preview-canvas]',
 });
 
 // ─── Sidebar ─────────────────────────────────────────────────────

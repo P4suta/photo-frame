@@ -128,4 +128,18 @@ export const globalCss = defineGlobalStyles({
     outlineOffset: '2px',
     borderRadius: 'phi.m3',
   },
+
+  // View Transitions — the preview canvas declares
+  // `view-transition-name: preview-canvas` (see `previewCanvas`
+  // in App.styles.ts) so Preset / Resolution changes crossfade
+  // the canvas content GPU-side instead of hard-cutting. The
+  // duration is tuned to ~14 frames at 60Hz — long enough to
+  // read as a deliberate transition, short enough that the user
+  // doesn't wait. The easing is a smooth-out curve so the
+  // transition decelerates into the new state rather than
+  // landing with a perceptible "stop".
+  '::view-transition-old(preview-canvas), ::view-transition-new(preview-canvas)': {
+    animationDuration: '[240ms]',
+    animationTimingFunction: '[cubic-bezier(0.32, 0.72, 0, 1)]',
+  },
 });
