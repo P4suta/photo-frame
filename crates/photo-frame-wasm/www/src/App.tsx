@@ -457,15 +457,49 @@ export const App = () => {
     }
   };
 
+  // ── stage size + contain-fit frame ─────────────────────────────
+  //
+  // The preview wrapper's pixel size is computed here from the
+  // measured stage rect and the source aspect, then handed to
+  // the wrapper as inline `width` / `height`. This is the only
+  // reliably-rendering contain-fit when the child of the
+  // wrapper is a `<canvas>` (whose own intrinsic size confuses
+  // CSS grid-item min-content).
+  let stageCanvasRef: HTMLDivElement | undefined;
+  const [stageSize, setStageSize] = createSignal<{ w: number; h: number }>({ w: 0, h: 0 });
+
+  onMount(() => {
+    const el = stageCanvasRef;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      setStageSize({ w: entry.contentRect.width, h: entry.contentRect.height });
+    });
+    ro.observe(el);
+    onCleanup(() => ro.disconnect());
+  });
+
+  // `frameSize` returns inline `width` / `height` strings (or
+  // `null` until we have both a preview and a measured stage).
+  // Contain-fit: pick whichever of the two stage axes is the
+  // bottleneck against the source aspect, then derive the
+  // other axis from it.
+  const frameSize = createMemo<{ width: string; height: string } | null>(() => {
+    const px = previewPixels();
+    const stage = stageSize();
+    if (!px || stage.w === 0 || stage.h === 0) return null;
+    const srcAspect = px.width / px.height;
+    // Width-driven fit: take full stage width, derive height.
+    // Height-driven fit: take full stage height, derive width.
+    // Whichever fits inside the stage on both axes wins.
+    const hIfWidthFull = stage.w / srcAspect;
+    const fitW = hIfWidthFull <= stage.h ? stage.w : stage.h * srcAspect;
+    const fitH = fitW / srcAspect;
+    return { width: `${Math.floor(fitW)}px`, height: `${Math.floor(fitH)}px` };
+  });
+
   // ── draw effect ──────────────────────────────────────────────────
-  // Paints the cached RGBA into a container-sized drawing buffer
-  // with `object-fit: contain` semantics. We deliberately do NOT
-  // set the canvas's intrinsic size to the image's pixel
-  // dimensions — doing so would make the <canvas> element's
-  // intrinsic aspect ratio override `object-fit: contain` and
-  // crop portrait images vertically inside a wider container.
-  // Instead the drawing buffer matches the container × DPR and
-  // the image is centred + scaled to fit inside it.
   let canvasRef: HTMLCanvasElement | undefined;
 
   const paintPreview = (canvas: HTMLCanvasElement): void => {
@@ -625,6 +659,13 @@ export const App = () => {
         console.warn('thumbnail generation failed', file.name, error);
       }
     }
+    // Thumbnails are all in flight now; kick off the full-
+    // resolution background pass so the Worker queue runs
+    // thumb → full in that order. Without this sequencing the
+    // batch encode (which dwarfs each thumb in cost) would
+    // grab the Worker first and the user would stare at
+    // pulsing placeholders for the whole batch's duration.
+    if (gen === thumbnailGeneration) onProcessBatch();
   };
 
   onCleanup(() => {
@@ -721,35 +762,17 @@ export const App = () => {
     w.postMessage(request);
   };
 
-  // Auto-trigger background batch processing whenever the file
-  // set or any render-affecting setting changes, debounced so a
-  // theme/quality drag doesn't kick off a new full pass per tick.
-  const BATCH_PROCESS_DEBOUNCE_MS = 320;
-  let batchProcessDebounce: ReturnType<typeof setTimeout> | null = null;
-  createEffect(
-    on(
-      () => {
-        const files = batchFiles();
-        if (!files) return null;
-        return {
-          files,
-          theme: theme(),
-          layout: layout(),
-          showMeta: showMeta(),
-          quality: quality(),
-          maxLongEdge: effectiveMaxLongEdge(),
-        };
-      },
-      (scope) => {
-        if (batchProcessDebounce !== null) clearTimeout(batchProcessDebounce);
-        if (!scope) return;
-        batchProcessDebounce = setTimeout(() => {
-          batchProcessDebounce = null;
-          onProcessBatch();
-        }, BATCH_PROCESS_DEBOUNCE_MS);
-      },
-    ),
-  );
+  // The full-resolution background batch encode is sequenced
+  // *after* the thumbnail pass (see `regenerateBatchThumbnails`
+  // — its tail call invokes `onProcessBatch`). That ordering
+  // matters: the Worker queue is single-threaded, and a 10-file
+  // full encode is orders of magnitude heavier than each thumb,
+  // so dispatching them concurrently means the user stares at
+  // pulsing placeholders until the whole batch finishes. Sending
+  // thumbs first lets them paint in fast and only then does the
+  // heavy work start. The thumbnail effect already covers every
+  // setting change that should re-encode the batch, so no
+  // separate debounce / generation effect is needed here.
 
   const applyBatchResults = (results: BatchResult[]): void => {
     setBatchRows((rows) =>
@@ -837,20 +860,28 @@ export const App = () => {
         </Show>
 
         <Show when={mode() === 'single'}>
-          <div class={stageCanvas}>
-            {/* The frame's aspect ratio tracks the actual
-                framed-image aspect once a preview is ready —
-                that's what makes the drop shadow line up with
-                the photo's edges instead of with a letterboxed
-                Canvas rect. Before the first preview lands the
-                frame is `auto`-sized off the φ:1 default in
-                `previewFrame`. */}
+          <div
+            class={stageCanvas}
+            ref={(el) => {
+              stageCanvasRef = el;
+            }}
+          >
+            {/* Frame size is computed in JS from the measured
+                stage size + source aspect (see `frameSize`).
+                Going through inline `width` / `height` is the
+                only way to get reliable contain-fit when the
+                child is a `<canvas>` — CSS aspect-ratio + max-*
+                tangles with the canvas's intrinsic size in
+                grid-item min-content negotiation. */}
             <div
               class={previewFrame}
-              style={(() => {
-                const px = previewPixels();
-                return px ? { 'aspect-ratio': `${px.width} / ${px.height}` } : {};
-              })()}
+              style={
+                frameSize() ?? {
+                  width: '0',
+                  height: '0',
+                  visibility: 'hidden',
+                }
+              }
             >
               <canvas ref={canvasRef} class={previewCanvas} />
             </div>

@@ -150,21 +150,14 @@ export const stageCanvas = css(stageInnerBase, {
 // width. Either way the frame sits fully inside the stage —
 // no axis overflow, no clipping — and the drop shadow falls
 // on the photo's own silhouette.
+// `width / height` are set inline by the App from a JS
+// contain-fit calculation against the stage's measured size.
+// CSS `aspect-ratio` + `max-w/h` was unreliable here: the
+// preview canvas's intrinsic size leaked back into the parent
+// grid item's min-content negotiation and the wrapper would
+// either burst the stage or collapse to zero depending on the
+// source aspect. Sizing it from JS is boring but always lands.
 export const previewFrame = css({
-  aspectRatio: '[1.618]',
-  width: '[auto]',
-  height: '[auto]',
-  maxWidth: 'full',
-  maxHeight: 'full',
-  // Grid items default `min-width / min-height` to `min-content`,
-  // which here means "the canvas's intrinsic size" — and that's
-  // what was letting the wrapper bust out of the stage when the
-  // canvas drawing buffer grew (large preview → larger intrinsic
-  // canvas size → wrapper refuses to shrink). Zeroing both
-  // minimums lets the `max-w/h: 100%` + `aspect-ratio` contain-
-  // fit logic actually take effect.
-  minWidth: '0',
-  minHeight: '0',
   display: 'flex',
   alignItems: 'stretch',
   justifyContent: 'stretch',
