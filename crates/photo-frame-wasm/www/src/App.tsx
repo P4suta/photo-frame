@@ -46,6 +46,7 @@ import {
   type WorkerRequest,
 } from './frame-client';
 import { Gallery } from './Gallery';
+import { GoldenSpiral } from './GoldenSpiral';
 
 const PREVIEW_LONG_EDGE = 1600;
 // Phase G1 dropped the prepare-side debounce entirely: the WASM
@@ -671,6 +672,7 @@ export const App = () => {
       <main class={stage}>
         <Show when={mode() === 'empty'}>
           <div class={stageEmpty}>
+            <GoldenSpiral />
             <DropZone onLoad={onDrop} />
           </div>
         </Show>
