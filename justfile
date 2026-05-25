@@ -36,11 +36,16 @@ lint: lint-rust lint-deps lint-ts lint-typos
 lint-rust:
     cargo clippy --workspace --all-targets -- -D warnings
 
-# Enforce the Pure-Rust dep contract: deny.toml lists C-compiling build deps
-# (cc / bindgen / pkg-config / vcpkg / cmake / ...) that may never enter the
-# transitive dep tree of any workspace crate.
+# Enforce the Pure-Rust dep contract + license / advisory / source gates.
+# The four subchecks mirror what the `security.yml` workflow runs as
+# separate matrix jobs, but bundling them here means `just lint` (and the
+# lefthook pre-push hook that calls it) catches them locally instead of
+# letting CI fail. `bans` enforces the C-toolchain banlist (cc, bindgen,
+# pkg-config, etc.); `licenses` enforces the allow-list in
+# `deny.toml [licenses]`; `advisories` flags known RUSTSEC findings;
+# `sources` restricts deps to crates.io + an explicit allow-list.
 lint-deps:
-    cargo deny --workspace check bans
+    cargo deny --workspace check bans licenses advisories sources
 
 lint-ts:
     biome lint .
