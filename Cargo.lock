@@ -1276,6 +1276,8 @@ dependencies = [
  "thiserror",
  "tracing",
  "tracing-test",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]

@@ -234,4 +234,5 @@ same fixture × stage matrix. Negative = faster.
 | --- | --- | ---: | ---: | ---: | ---: | --- |
 | baseline | `1dcbfdf` | 1.25 s | 268 ms | 819 ms | 131 ms | encode = 66 % of pipeline; rotation costs +30 % at decode |
 | C1 zero-copy `Pixels` handoff | post-C1 | **1.17 s** (-6 %) | 270 ms (noise) | 806 ms (-1.5 %) | **92 ms** (-30 %) | dhat: total alloc 535 MB → 439 MB (-97 MB ≈ one 92 MB RGBA buffer), peak 336 → 243 MB |
+| D1 zune-jpeg JPEG decode | post-D1 | **1.11 s** (-11 % vs baseline) | **217 ms** (-19 %) | 788 ms (-2 %, noise) | 94 ms | dhat: total alloc 439 MB → 353 MB (-86 MB, zune allocates less than image-crate's jpeg-decoder); peak unchanged at 243 MB. Decode wins range from -9 % (orientation=8, IDCT not on critical path) to -23 % (landscape) — confirms zune's SIMD YCbCr→RGB is the dominant accelerator |
 

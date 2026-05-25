@@ -32,6 +32,14 @@ image = { version = "0.25", default-features = false, features = [
     "bmp",
     "webp",
 ] }
+# Faster JPEG decode path used by photo-frame-decode for the JPEG
+# format (the most common input). Pure-Rust with internal SIMD
+# acceleration on x86_64; falls back to scalar on wasm32. The image
+# crate is still used for PNG / TIFF / BMP / WebP and for the
+# `DynamicImage::apply_orientation` shim that turns EXIF
+# Orientation 1..=8 into the right pixel layout.
+zune-jpeg    = "0.5"
+zune-core    = "0.5"
 kamadak-exif = "0.6"
 ab_glyph = "0.2"
 imageproc = { version = "0.26", default-features = false, features = ["text"] }
