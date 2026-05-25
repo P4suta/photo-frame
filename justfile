@@ -11,8 +11,26 @@ _default:
 ci: fmt-check lint test wasm-build web-build
 
 # Install lefthook git hooks (run once after clone).
+#
+# Some contributors have a global `core.hooksPath` pointing to a
+# personal hooks directory (e.g. `~/.config/git/hooks` for GPG-
+# signing enforcement across all repos). lefthook respects that
+# global setting and installs into it, which (a) silently shadows
+# the contributor's other repos' lefthook configs and (b) needs
+# `--reset-hooks-path` to undo — destructive on the global state.
+#
+# Setting per-repo `core.hooksPath = .git/hooks` first scopes the
+# lefthook install to this repo only. The contributor's global
+# hooks keep firing for every OTHER repo unchanged; THIS repo
+# gets the strict `lefthook.yml` pre-commit / pre-push pipeline.
 hooks:
-    lefthook install
+    git config core.hooksPath .git/hooks
+    # `--force`: lefthook refuses install when both local + global
+    # `core.hooksPath` are set (it can't tell which the contributor
+    # wants). We've just set the local one one line above, so the
+    # force is safe and unambiguous: install into `.git/hooks/`,
+    # ignore the global setting.
+    lefthook install --force
 
 # ── Formatting ───────────────────────────────────────────────────────────────
 
