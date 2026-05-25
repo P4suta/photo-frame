@@ -465,12 +465,25 @@ export const App = () => {
   // reliably-rendering contain-fit when the child of the
   // wrapper is a `<canvas>` (whose own intrinsic size confuses
   // CSS grid-item min-content).
-  let stageCanvasRef: HTMLDivElement | undefined;
+  //
+  // The stage-canvas div lives inside a `<Show>` that flips
+  // with `mode`, so its DOM node mounts/unmounts as the user
+  // moves between empty / single / batch. The ref signal lets
+  // a `createEffect` rebuild the ResizeObserver every time the
+  // node is recreated — a one-shot `onMount` would have only
+  // ever caught the initial empty-mode null.
+  const [stageCanvasEl, setStageCanvasEl] = createSignal<HTMLDivElement | undefined>();
   const [stageSize, setStageSize] = createSignal<{ w: number; h: number }>({ w: 0, h: 0 });
 
-  onMount(() => {
-    const el = stageCanvasRef;
-    if (!el) return;
+  createEffect(() => {
+    const el = stageCanvasEl();
+    if (!el) {
+      setStageSize({ w: 0, h: 0 });
+      return;
+    }
+    // Seed with a synchronous measurement so the first paint
+    // doesn't have to wait for the observer to tick.
+    setStageSize({ w: el.clientWidth, h: el.clientHeight });
     const ro = new ResizeObserver((entries) => {
       const entry = entries[0];
       if (!entry) return;
@@ -860,12 +873,7 @@ export const App = () => {
         </Show>
 
         <Show when={mode() === 'single'}>
-          <div
-            class={stageCanvas}
-            ref={(el) => {
-              stageCanvasRef = el;
-            }}
-          >
+          <div class={stageCanvas} ref={setStageCanvasEl}>
             {/* Frame size is computed in JS from the measured
                 stage size + source aspect (see `frameSize`).
                 Going through inline `width` / `height` is the
