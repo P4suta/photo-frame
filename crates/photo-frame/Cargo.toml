@@ -15,6 +15,13 @@ path = "src/lib.rs"
 default = []
 # Forwards to photo-frame-decode/heif. Opt-in C-dep path for HEIC input.
 heif = ["photo-frame-decode/heif"]
+# Span-timing flamegraph capture. Adds the `tracing-flame` layer
+# behind [`trace::flame_guard`]; the output is a `.folded` file the
+# `inferno-flamegraph` tool turns into an SVG. Opt-in because the
+# layer adds per-span IO overhead that nobody wants in a production
+# CLI run. Used by `just profile-trace` and the future
+# `--profile-trace=PATH` CLI flag (Phase E).
+trace = ["dep:tracing-flame", "dep:tracing-subscriber"]
 
 [dependencies]
 photo-frame-types  = { workspace = true }
@@ -24,6 +31,8 @@ photo-frame-encode = { workspace = true }
 thiserror          = { workspace = true }
 miette             = { workspace = true }
 tracing            = { workspace = true }
+tracing-flame      = { version = "0.2", optional = true }
+tracing-subscriber = { workspace = true, optional = true }
 web-time           = { workspace = true }
 
 [dev-dependencies]

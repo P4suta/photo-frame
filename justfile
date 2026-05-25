@@ -110,10 +110,47 @@ watch:
 bench-measure variant="all":
     scripts/bench-build.sh {{ variant }}
 
-# Run the criterion benchmark suite (pipeline hot paths). HTML report
-# lands in target/criterion/<bench>/report/index.html.
-bench:
-    cargo bench -p photo-frame-bench
+# Run the divan benchmark suite (pipeline hot paths). Median wall-clock
+# and MP/s per stage × per fixture are printed to stdout; the BENCHMARKS.md
+# "Runtime performance" section is the curated history. Extra args forward
+# to divan directly: `just bench decode --sample-count 30` runs only the
+# decode group with 30 samples per fixture.
+bench *args:
+    cargo bench -p photo-frame-bench --bench pipeline -- "$@"
+
+# Run iai-callgrind instruction-count benches. Requires `valgrind` at
+# the OS level (`apt install valgrind`) plus the `iai-callgrind-runner`
+# binary from mise.toml. Output goes to target/iai/ and is the basis
+# for the runtime-bench CI regression gate.
+bench-icount *args:
+    cargo bench -p photo-frame-bench --bench icount -- "$@"
+
+# Record a samply CPU profile of a single CLI invocation. Drop the
+# resulting JSON onto https://profiler.firefox.com/ to inspect (or
+# run `samply load target/profiling/trace.json` to open it locally).
+# Requires `samply` (mise installs from cargo:samply) and Linux
+# `kernel.perf_event_paranoid <= 2` (the typical default).
+profile-pipeline fixture:
+    cargo build -p photo-frame-cli --release
+    mkdir -p target/profiling
+    samply record -o target/profiling/trace.json -- \
+        target/release/photo-frame-cli {{ fixture }} -o target/profiling/out.jpg
+    @echo ""
+    @echo "▶ trace saved to target/profiling/trace.json"
+    @echo "▶ open: samply load target/profiling/trace.json"
+    @echo "▶ or upload to https://profiler.firefox.com/"
+
+# Render the per-stage tracing span timeline as a flamegraph SVG.
+# Compiles the CLI with the opt-in `trace` feature on photo-frame so
+# pipeline / decode / frame / encode span enter-exit events flush to
+# target/profiling/trace.folded, then turns that into an SVG via
+# `inferno-flamegraph` (mise installs from cargo:inferno). The CLI's
+# `--profile-trace=PATH` flag wiring lands in Phase E; until then,
+# this recipe writes a `.folded` file the user opens manually.
+profile-trace fixture:
+    @echo "Phase E will wire the --profile-trace=PATH CLI flag."
+    @echo "For now: invoke photo_frame::trace::flame_guard from your test driver."
+    @false
 
 # End-to-end CLI tests (binary-level subprocess + stdout / stderr /
 # exit code assertions). WASM playwright suite lives separately under

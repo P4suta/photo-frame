@@ -17,6 +17,13 @@ failure-output     = "immediate-final"
 success-output     = "never"
 slow-timeout       = { period = "30s", terminate-after = 3 }
 fail-fast          = false
+# Divan generates `#[test]` shims for every `#[divan::bench]` case so
+# `cargo bench` can run them as smoke tests; under
+# `cargo nextest run --all-targets` those shims would execute the
+# real bench code (~30 s on 24 MP fixtures) and undo the Phase 1.2
+# test-time work. Filter the bench targets out of the default test
+# run — `just bench` still drives them through the divan main.
+default-filter = "not kind(bench)"
 
 # Heavy single tests (sns_preset_caps_output_dimensions in particular)
 # legitimately take >1s. Don't let nextest's progress bar flag those as

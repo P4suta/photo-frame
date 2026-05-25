@@ -16,6 +16,9 @@ mod batch;
 mod options;
 mod pipeline;
 
+#[cfg(feature = "trace")]
+pub mod trace;
+
 pub use photo_frame_decode as decode;
 pub use photo_frame_encode as encode;
 pub use photo_frame_frame as frame;

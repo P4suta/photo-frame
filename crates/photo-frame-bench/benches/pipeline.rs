@@ -1,67 +1,148 @@
-//! Hot-path benchmarks for the photo-frame pipeline.
+//! Per-stage and end-to-end benches for the photo-frame pipeline.
 //!
-//! Three groups, mirroring the pipeline stages:
-//!   - `decode`: 1024×768 JPEG (synthesised) → Photograph
-//!   - `frame`:  3000×2000 RGBA8 Photograph → framed Pixels
-//!   - `encode`: 3000×2000 RGBA8 Pixels → JPEG bytes at q78 / q92 / q98
+//! Five groups, mirroring the pipeline boundary plus a couple of
+//! sub-steps that Phase B will need to attribute cost to:
 //!
-//! Run via `just bench` or `cargo bench -p photo-frame-bench`.
-//! Output is HTML at `target/criterion/<bench>/report/index.html`.
+//! - `decode`: raw JPEG bytes → `Photograph` (decode + EXIF +
+//!   orientation, the whole `from_bytes` surface).
+//! - `resize_lanczos3_to_sns`: an in-memory `RgbaImage` resized to
+//!   the SNS-preset long edge via `image::DynamicImage::resize(Lanczos3)`,
+//!   isolated from the rest of the renderer so the filter's contribution
+//!   to `frame` can be read off.
+//! - `frame`: `Photograph` → framed `Pixels` (the full
+//!   `photo_frame_frame::render`, including caption draw and canvas
+//!   compose).
+//! - `encode`: framed `Pixels` → JPEG bytes at quality 92
+//!   (the user-default).
+//! - `pipeline`: end-to-end bytes-in / bytes-out, which is the
+//!   number the user cares about — Phase B's report anchors against
+//!   this row.
+//!
+//! Each bench reports MP/s via `divan::counter::ItemsCount`. Run via
+//! `just bench` (`cargo bench -p photo-frame-bench`). Output goes to
+//! stdout; `artifacts/bench/runtime/<UTC>/` capture is wired up in
+//! Phase A3.
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use image::{codecs::jpeg::JpegEncoder, ExtendedColorType, ImageEncoder, RgbImage};
+use divan::counter::ItemsCount;
+use divan::{black_box, Bencher};
+
+use image::{DynamicImage, ImageBuffer, Rgba, RgbaImage};
 use photo_frame::{
     decode::from_bytes,
     encode::{jpeg, JpegOptions},
     frame::{render, FrameOptions},
-    types::{Photograph, Pixels, Provenance},
+    types::Pixels,
 };
+use photo_frame_bench::fixtures::{self, Fixture};
 
-fn synth_jpeg(w: u32, h: u32) -> Vec<u8> {
-    let img = RgbImage::from_pixel(w, h, image::Rgb([200, 60, 60]));
-    let mut out = Vec::new();
-    JpegEncoder::new_with_quality(&mut out, 90)
-        .write_image(&img, w, h, ExtendedColorType::Rgb8)
-        .expect("synthetic jpeg encode");
-    out
+fn main() {
+    divan::main();
 }
 
-fn synth_photograph(w: u32, h: u32) -> Photograph {
-    let buf = vec![200_u8; (w as usize) * (h as usize) * 4];
-    let pixels = Pixels::from_rgba8(w, h, buf).expect("pixels");
-    Photograph::new(pixels, Provenance::default())
+// ─── decode: bytes → Photograph ─────────────────────────────────────────
+
+#[divan::bench(args = fixtures::all())]
+fn decode(bencher: Bencher<'_, '_>, fixture: &Fixture) {
+    bencher
+        .counter(ItemsCount::new(fixture.pixel_count()))
+        .bench(|| from_bytes(black_box(&fixture.bytes)).expect("decode"));
 }
 
-fn bench_decode(c: &mut Criterion) {
-    let jpeg_bytes = synth_jpeg(1024, 768);
-    let mut g = c.benchmark_group("decode");
-    g.throughput(Throughput::Bytes(jpeg_bytes.len() as u64));
-    g.bench_function("jpeg_1024x768", |b| {
-        b.iter(|| from_bytes(&jpeg_bytes).expect("decode"));
-    });
-    g.finish();
-}
+// ─── resize: isolated Lanczos3 cost on a synthesised RgbaImage ──────────
+//
+// Reproduces `render.rs:79` exactly (DynamicImage::resize with
+// Lanczos3 to the SNS-preset long edge of 2048) but driven directly,
+// so Phase B can read the filter's contribution to `frame` without
+// having to subtract caption / compose costs.
 
-fn bench_frame(c: &mut Criterion) {
-    let photo = synth_photograph(3000, 2000);
-    let opts = FrameOptions::default();
-    let mut g = c.benchmark_group("frame");
-    g.bench_function("render_3000x2000", |b| {
-        b.iter(|| render(&photo, &opts));
-    });
-    g.finish();
-}
+const SNS_LONG_EDGE: u32 = 2048;
 
-fn bench_encode(c: &mut Criterion) {
-    let pixels = Pixels::from_rgba8(3000, 2000, vec![200; 3000 * 2000 * 4]).expect("pixels");
-    let mut g = c.benchmark_group("encode");
-    for q in [78_u8, 92, 98] {
-        g.bench_with_input(BenchmarkId::from_parameter(q), &q, |b, &q| {
-            b.iter(|| jpeg(&pixels, &JpegOptions { quality: q }).expect("encode"));
-        });
+fn synth_rgba_image(fixture: &Fixture) -> RgbaImage {
+    let pixel_count = (fixture.width as usize) * (fixture.height as usize);
+    let mut buf = Vec::with_capacity(pixel_count * 4);
+    for _ in 0..pixel_count {
+        buf.extend_from_slice(&[200, 60, 60, 255]);
     }
-    g.finish();
+    ImageBuffer::<Rgba<u8>, _>::from_raw(fixture.width, fixture.height, buf)
+        .expect("synth buffer length matches w*h*4 by construction")
 }
 
-criterion_group!(benches, bench_decode, bench_frame, bench_encode);
-criterion_main!(benches);
+#[divan::bench(args = fixtures::all())]
+fn resize_lanczos3_to_sns(bencher: Bencher<'_, '_>, fixture: &Fixture) {
+    // The cost we want to measure is the filter itself, not the
+    // upstream buffer copy. Build the input once outside the timed
+    // closure and reuse it across samples.
+    let img = synth_rgba_image(fixture);
+    let long = fixture.width.max(fixture.height);
+    // Integer-only target-dimension math — same ratio as `render.rs:79`
+    // but without the float→u32 cast clippy makes us own. The numerator
+    // fits in u64 trivially (max is 6016 × 2048 ≈ 1.2e7), and dividing
+    // by a `long` that is strictly greater than `SNS_LONG_EDGE` keeps
+    // the result smaller than the input dimension, so it always fits
+    // back into u32.
+    let (new_w, new_h) = if long <= SNS_LONG_EDGE {
+        (fixture.width, fixture.height)
+    } else {
+        let edge = u64::from(SNS_LONG_EDGE);
+        let long_u64 = u64::from(long);
+        let w64 = u64::from(fixture.width) * edge / long_u64;
+        let h64 = u64::from(fixture.height) * edge / long_u64;
+        (
+            u32::try_from(w64.max(1)).expect("fits"),
+            u32::try_from(h64.max(1)).expect("fits"),
+        )
+    };
+    bencher
+        .counter(ItemsCount::new(fixture.pixel_count()))
+        .bench_local(|| {
+            DynamicImage::ImageRgba8(img.clone())
+                .resize(
+                    black_box(new_w),
+                    black_box(new_h),
+                    image::imageops::FilterType::Lanczos3,
+                )
+                .to_rgba8()
+        });
+}
+
+// ─── frame: full render (compose + caption + downscale) ─────────────────
+
+#[divan::bench(args = fixtures::all())]
+fn frame(bencher: Bencher<'_, '_>, fixture: &Fixture) {
+    let photo = from_bytes(&fixture.bytes).expect("decode");
+    let opts = FrameOptions::default();
+    bencher
+        .counter(ItemsCount::new(fixture.pixel_count()))
+        .bench_local(|| render(black_box(&photo), black_box(&opts)));
+}
+
+// ─── encode: framed Pixels → JPEG ───────────────────────────────────────
+//
+// We bench encode at the user-default quality (92) on the post-frame
+// canvas, not the raw decoded pixels — that is the byte path the CLI
+// actually walks. The post-frame canvas is larger than the source by
+// the golden-ratio border, so `bencher.counter` uses the canvas pixel
+// count, not the source's.
+
+#[divan::bench(args = fixtures::all())]
+fn encode(bencher: Bencher<'_, '_>, fixture: &Fixture) {
+    let photo = from_bytes(&fixture.bytes).expect("decode");
+    let pixels: Pixels = render(&photo, &FrameOptions::default());
+    let opts = JpegOptions::default();
+    let canvas_px = u64::from(pixels.width()) * u64::from(pixels.height());
+    bencher
+        .counter(ItemsCount::new(canvas_px))
+        .bench_local(|| jpeg(black_box(&pixels), black_box(&opts)).expect("encode"));
+}
+
+// ─── pipeline: end-to-end bytes → bytes ─────────────────────────────────
+
+#[divan::bench(args = fixtures::all())]
+fn pipeline(bencher: Bencher<'_, '_>, fixture: &Fixture) {
+    let opts = photo_frame::PipelineOptions::default();
+    bencher
+        .counter(ItemsCount::new(fixture.pixel_count()))
+        .bench(|| {
+            photo_frame::pipeline(black_box(&fixture.bytes), black_box(&opts)).expect("pipeline")
+        });
+}

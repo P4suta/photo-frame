@@ -1,0 +1,103 @@
+name: runtime-bench
+
+# Runs the divan + (eventually) iai-callgrind harnesses on every PR
+# and posts a sticky comment with the per-stage / per-fixture
+# numbers. Sibling to bench.yml, which covers build/test/lint
+# timings — keep the cache namespace distinct.
+
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      # The bench fixture corpus itself doesn't change the numbers,
+      # but a fixture rename should still re-run so the comment
+      # picks up the new label.
+      - 'artifacts/bench/runtime/**'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: runtime-bench-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  divan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: runtime-bench-${{ runner.os }}
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+
+      - name: Divan bench (short sample-count for PR-time)
+        id: divan
+        run: |
+          mkdir -p artifacts/bench/runtime/pr-${{ github.run_id }}
+          out="artifacts/bench/runtime/pr-${{ github.run_id }}/divan.txt"
+          # 5 samples is enough to spot >10% wall-clock regressions
+          # without making the PR check feel slow. Full sample-count
+          # runs land via the `just bench` workflow on demand.
+          just bench --sample-count 5 --sample-size 1 2>&1 | tee "$out"
+          echo "out=$out" >> "$GITHUB_OUTPUT"
+
+      - name: Format divan output as PR comment body
+        id: comment
+        run: |
+          body="artifacts/bench/runtime/pr-${{ github.run_id }}/comment.md"
+          {
+            echo '### Runtime bench (divan)'
+            echo
+            echo 'Short PR-time run (`--sample-count 5`). Treat as a'
+            echo 'directional check, not a precise number — `just bench`'
+            echo 'locally with the default sample-count gives the'
+            echo 'numbers that go into `BENCHMARKS.md`.'
+            echo
+            echo '```'
+            cat "${{ steps.divan.outputs.out }}"
+            echo '```'
+          } > "$body"
+          echo "body=$body" >> "$GITHUB_OUTPUT"
+
+      - name: Comment on PR
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: runtime-bench-${{ runner.os }}
+          path: ${{ steps.comment.outputs.body }}
+
+      - name: Upload divan artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-bench-${{ github.run_id }}
+          path: artifacts/bench/runtime/pr-${{ github.run_id }}/
+          retention-days: 14
+
+  # iai-callgrind hard-gate. Skipped today because the runner / valgrind
+  # bootstrap on every PR adds ~3 min for ~6 bench cases. Phase A3.2
+  # turns this on once we've confirmed the icount.rs harness is stable
+  # against the realistic fixture set.
+  #
+  # icount:
+  #   runs-on: ubuntu-latest
+  #   timeout-minutes: 30
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: dtolnay/rust-toolchain@stable
+  #     - run: sudo apt-get install -y valgrind
+  #     - uses: taiki-e/install-action@v2
+  #       with:
+  #         tool: just,cargo-binstall
+  #     - run: cargo binstall iai-callgrind-runner
+  #     - run: just bench-icount --save-baseline pr
+  #     - run: just bench-icount --baseline pr --compare-baseline main

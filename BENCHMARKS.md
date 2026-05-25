@@ -159,3 +159,78 @@ Raw JSON: `artifacts/bench/mold_cli_relink.json` (kept locally).
 | GH Actions wall-clock | -50% | parallel jobs (Phase 2) |
 
 These are aspirational; real numbers will land here as each phase completes.
+
+## Runtime performance
+
+Separate measurement track for the **image-processing pipeline itself**
+(decode → frame → encode), as opposed to the build / test / lint timings
+above. Driven by the divan harness in `crates/photo-frame-bench/`
+(`just bench`). Every entry is the median of a sample run; the raw
+divan output lives under `artifacts/bench/runtime/<UTC>/`.
+
+The fixture matrix is fixed once for the lifetime of the project so
+rows across phases stay comparable. The workspace `.gitignore` excludes
+image binaries, so the **real-world fixtures are local-only** — on CI
+and clean clones, the bench harness logs a one-line warning and runs
+the synth-only subset. The synth fixtures alone are enough for
+regression detection; the real-world rows in the table below capture
+"as measured on the author's machine" snapshots that future runs need
+to reproduce by dropping the same files into `examples/`.
+
+| Fixture | Source | Dimensions | EXIF orient. | Notes |
+| --- | --- | ---: | :---: | --- |
+| `real_z5_landscape_a_24mp` | `examples/IMG_3936.JPG` | 6016×4016 | 1 | Nikon Z 5 native landscape |
+| `real_z5_landscape_b_24mp` | `examples/IMG_3939.JPG` | 6016×4016 | 1 | second sample, same camera |
+| `real_z5_portrait_rot8_24mp` | `examples/IMG_3940.JPG` | 6016×4016 | 8 | exercises 90° CCW rotation |
+| `synth_noise_4mp_2400x1600` | xorshift RGB → JPEG q85 | 2400×1600 | 1 | smartphone-class |
+| `synth_noise_12mp_4240x2832` | xorshift RGB → JPEG q85 | 4240×2832 | 1 | mid-range mirrorless |
+| `synth_noise_24mp_6016x4016` | xorshift RGB → JPEG q85 | 6016×4016 | 1 | matches Z 5 sensor MP count |
+| `synth_noise_panorama_10000x100` | xorshift RGB → JPEG q85 | 10000×100 | 1 | extreme aspect, edge cases |
+
+### Baseline (Phase A, commit `1dcbfdf`)
+
+Raw output: [`artifacts/bench/runtime/20260525T001511Z/`](artifacts/bench/runtime/20260525T001511Z/).
+Host: Linux 6.8.0-117-generic x86_64, rustc 1.95.0, cargo 1.95.0,
+divan 0.1.21, sample-count=10.
+
+Median wall-clock per stage (ms) and throughput (MP/s, computed against
+the **source** pixel count, not the framed canvas):
+
+| Stage \ Fixture | `r_z5_la_a` | `r_z5_la_b` | `r_z5_pt8` | `synth_4mp` | `synth_12mp` | `synth_24mp` | `panorama` |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `decode` (ms)            | 268  | 225  | 357  | 86   | 270  | 546  | 20.0 |
+| `decode` (MP/s)          | 90.0 | 107  | 67.7 | 44.5 | 44.6 | 44.2 | 49.9 |
+| `resize_lanczos3_to_sns` (ms) | 440  | 436  | 439  | 167  | 272  | 439  | 9.9  |
+| `frame` (ms, no resize)  | 131  | 131  | 130  | 9.1  | 63.4 | 126  | 2.2  |
+| `encode` q92 (ms)        | 819  | 776  | 755  | 227  | 732  | 1423 | 58.1 |
+| `pipeline` (ms)          | 1245 | 1143 | 1266 | 333  | 1097 | 2111 | 79.4 |
+| `pipeline` (MP/s)        | 19.4 | 21.1 | 19.1 | 11.5 | 10.9 | 11.4 | 12.6 |
+
+Three observations from the baseline that **the plan must take as data,
+not as preconception**:
+
+1. **Encode dominates.** On the representative 24 MP real-world fixture
+   the JPEG encode at q92 takes 819 ms — **66 %** of the 1.25 s
+   pipeline wall-clock. Decode is 22 %, frame (no resize) is 10 %.
+   Optimisation priority points first at encode, then decode.
+
+2. **EXIF orientation=8 costs ~30 % at decode.** Comparing the two
+   landscape fixtures (decode median 247 ms avg) against the rotated
+   portrait (357 ms), orientation rotation is a real cost line, not a
+   rounding error. Phase B should split it out for isolated measurement.
+
+3. **Synthetic ≠ real.** The synth noise fixtures decode at
+   ~44 MP/s vs the real-world ones at ~90-107 MP/s. Xorshift produces
+   maximum-entropy JPEGs that the decoder works harder on. Useful as a
+   pessimistic upper bound, but real-world numbers are the ones we
+   actually want to move.
+
+### Per-phase deltas (runtime)
+
+After each phase lands a row appends below with new medians on the
+same fixture × stage matrix. Negative = faster.
+
+| Phase | Snapshot | 24 MP real `pipeline` | 24 MP real `decode` | 24 MP real `encode` | 24 MP real `frame` | Notes |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| baseline | `1dcbfdf` | 1.25 s | 268 ms | 819 ms | 131 ms | encode = 66 % of pipeline; rotation costs +30 % at decode |
+
