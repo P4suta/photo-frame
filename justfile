@@ -83,7 +83,7 @@ test:
 # rustflags, and `wasm-bindgen-rayon`'s cfg-guard sees what it
 # expects.
 wasm-build:
-    cd crates/photo-frame-wasm && env RUSTUP_TOOLCHAIN=nightly-2026-04-01 CARGO_UNSTABLE_BUILD_STD=panic_abort,std wasm-pack build --target web --release --out-dir www/pkg
+    cd crates/photo-frame-wasm && env -u RUSTFLAGS RUSTUP_TOOLCHAIN=nightly-2026-04-01 CARGO_UNSTABLE_BUILD_STD=panic_abort,std wasm-pack build --target web --release --out-dir www/pkg
 
 # Mirror the Geist font files from the frame crate into the web bundle's
 # public/ directory so Vite serves them at /fonts/Geist/. Canonical source
