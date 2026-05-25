@@ -25,7 +25,10 @@ pre-commit:
       glob: '*.toml'
       run: taplo fmt --check {staged_files}
     typos:
-      run: typos --no-progress
+      # `--no-progress` was removed in typos-cli ~1.40; `--quiet` is
+      # the current way to suppress the progress bar that breaks
+      # lefthook's structured output rendering.
+      run: typos --quiet
     lint-ts:
       glob: '*.{ts,tsx,js,jsx}'
       run: biome lint {staged_files}
