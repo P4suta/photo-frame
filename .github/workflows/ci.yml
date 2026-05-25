@@ -154,12 +154,16 @@ jobs:
           targets: wasm32-unknown-unknown
           components: rust-src
 
-      - uses: mozilla-actions/sccache-action@v0.0.9
-      - name: Wire sccache into rustc
-        run: |
-          echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
-          echo 'SCCACHE_GHA_ENABLED=true' >> "$GITHUB_ENV"
-
+      # sccache is intentionally NOT wired here. With `-Z build-std`
+      # nightly rebuilds the standard library against the per-crate
+      # `target-feature=+atomics,+bulk-memory,+mutable-globals,+simd128`
+      # rustflags; sccache as `RUSTC_WRAPPER` interferes with that
+      # rebuild path (the cfg-guard in `wasm-bindgen-rayon` evaluates
+      # `cfg(target_feature = "atomics")` to `false` and fires its
+      # compile_error). Native jobs above DO use sccache and gain the
+      # cross-PR cache; the wasm build relies on Swatinem alone, which
+      # is still effective at making subsequent pushes to the same PR
+      # warm.
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: wasm-nightly
