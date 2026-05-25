@@ -55,18 +55,6 @@ import {
   type WorkerRequest,
 } from './frame-client';
 import { Gallery } from './Gallery';
-import { GoldenSpiral } from './GoldenSpiral';
-import { GoldenSpiralInward } from './GoldenSpiralInward';
-
-// Dev-only swap: flip this constant to compare the inward
-// (`'inward'`) variant against the default outward pencil
-// without rebuilding any URLs or routes. Keep `'outward'` on
-// `main`; the inward sibling stays in the tree as a side-by-
-// side reference while the animation language is being tuned.
-// The `as` keeps both branches type-reachable — without it TS
-// narrows to the literal and the conditional reads as dead.
-type SpiralKind = 'outward' | 'inward';
-const SPIRAL_KIND = 'outward' as SpiralKind;
 
 const PREVIEW_LONG_EDGE = 1600;
 // Phase G1 dropped the prepare-side debounce entirely: the WASM
@@ -728,7 +716,6 @@ export const App = () => {
       <main class={stage}>
         <Show when={mode() === 'empty'}>
           <div class={stageEmpty}>
-            {SPIRAL_KIND === 'inward' ? <GoldenSpiralInward /> : <GoldenSpiral />}
             <DropZone onLoad={onDrop} />
           </div>
         </Show>
