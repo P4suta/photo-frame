@@ -52,16 +52,15 @@ import {
 } from './frame-client';
 import { Gallery } from './Gallery';
 
-// Preview-render long-edge cap. The previous 1600 was tuned to
-// the old φ-letterbox layout where a portrait source filled
-// less than half the canvas anyway; now that the canvas wrapper
-// adopts the source aspect and grows to the stage's full
-// short-side, the same source can paint into a much larger
-// drawing buffer (stage height × DPR can easily clear 2000 px).
-// 3200 keeps the source resolution one step ahead of the
-// drawing buffer at any reasonable display size — sharp on 2K
-// and 4K screens — without paying the full-resolution cost.
-const PREVIEW_LONG_EDGE = 3200;
+// The preview pipeline no longer caps the long edge below the
+// user's chosen `longEdge` setting — earlier passes used a
+// fixed 1600 / 3200 px ceiling here, but the new aspect-
+// tracking wrapper grows to the stage's short side and the
+// canvas drawing buffer can easily clear any static cap. Since
+// the source's long edge is now also known on drop (see the
+// `DroppedFile.longEdge` field), the preview can render at the
+// chosen resolution directly: WASM's own cache amortises the
+// extra cost across re-prepares for the same source.
 
 // `value` mirrors the Rust enum (`paper`/`ink`), `label` is the
 // UI face — direct colour names read more honestly than the
@@ -345,7 +344,7 @@ export const App = () => {
         if (!current) return null;
         return {
           current,
-          maxLongEdge: Math.min(PREVIEW_LONG_EDGE, effectiveMaxLongEdge() ?? Infinity),
+          maxLongEdge: effectiveMaxLongEdge(),
         };
       },
       (scope) => {
@@ -353,8 +352,7 @@ export const App = () => {
         prepareGeneration += 1;
         const gen = prepareGeneration;
         setPreviewVariants(new Map());
-        const maxLongEdge =
-          scope.maxLongEdge === Number.POSITIVE_INFINITY ? null : scope.maxLongEdge;
+        const maxLongEdge = scope.maxLongEdge;
         // Snapshot the user-visible variant at scope-change time —
         // we prepare this one first so the canvas updates ASAP.
         const initial = {
@@ -386,7 +384,7 @@ export const App = () => {
           theme: theme(),
           layout: layout(),
           show_meta: showMeta(),
-          max_long_edge: maxLongEdge === null ? null : Math.min(PREVIEW_LONG_EDGE, maxLongEdge),
+          max_long_edge: maxLongEdge,
         };
         void runPreparePromise(current, opts, key, prepareGeneration);
       },

@@ -156,6 +156,15 @@ export const previewFrame = css({
   height: '[auto]',
   maxWidth: 'full',
   maxHeight: 'full',
+  // Grid items default `min-width / min-height` to `min-content`,
+  // which here means "the canvas's intrinsic size" — and that's
+  // what was letting the wrapper bust out of the stage when the
+  // canvas drawing buffer grew (large preview → larger intrinsic
+  // canvas size → wrapper refuses to shrink). Zeroing both
+  // minimums lets the `max-w/h: 100%` + `aspect-ratio` contain-
+  // fit logic actually take effect.
+  minWidth: '0',
+  minHeight: '0',
   display: 'flex',
   alignItems: 'stretch',
   justifyContent: 'stretch',
