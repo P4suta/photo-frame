@@ -17,7 +17,15 @@ import {
 } from './frame-client';
 
 const PREVIEW_LONG_EDGE = 1600;
-const PREPARE_DEBOUNCE_MS = 120;
+// Phase G1 — the prepare path used to debounce by 120 ms so a rapid
+// preset click (which flips quality + max_long_edge together) only
+// dispatched one prepare. After Phase G1's WASM decoded-photograph
+// cache landed, the marginal cost of a redundant prepare is just the
+// frame stage (~50 ms at preview res) — so the debounce buys nothing
+// while shaving 120 ms off every theme / layout / showMeta toggle.
+// 0 ms means "next tick"; the worker still serialises requests and
+// `exchange()`'s request-ID filter drops stale replies.
+const PREPARE_DEBOUNCE_MS = 0;
 const ESTIMATE_DEBOUNCE_MS = 220;
 
 const THEMES = [
