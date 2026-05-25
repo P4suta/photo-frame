@@ -9,12 +9,19 @@
 
 use std::ops::RangeInclusive;
 
-use image::{codecs::jpeg::JpegEncoder, ExtendedColorType, ImageEncoder};
+use jpeg_encoder::{ColorType, Encoder as JpegEncoder, EncodingError};
 use miette::Diagnostic;
 use photo_frame_types::{Categorize, Category, Pixels};
 use thiserror::Error;
 
 const VALID_QUALITY: RangeInclusive<u8> = 1..=100;
+
+/// Hard ceiling jpeg-encoder accepts for image dimensions
+/// (its `encode` signature takes `u16`). At 65535 px on the long
+/// edge a single photo would already be a 270 MP camera output —
+/// well past anything photo-frame is realistically asked to
+/// process. Surface a typed error instead of panicking on truncation.
+const MAX_DIMENSION: u32 = u16::MAX as u32;
 
 /// Knobs for [`jpeg`].
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -46,22 +53,34 @@ pub enum EncodeError {
     )]
     InvalidQuality { got: u8 },
 
+    #[error("image dimension {got} exceeds JPEG limit of {max}")]
+    #[diagnostic(
+        code(photo_frame::encode::dimension_overflow),
+        help(
+            "JPEG's stream format encodes width and height as 16-bit \
+             values, so a single image cannot exceed 65535 px on either \
+             axis. If you legitimately need to encode something that \
+             large, split it into tiles."
+        )
+    )]
+    DimensionOverflow { got: u32, max: u32 },
+
     #[error("JPEG encoder failed")]
     #[diagnostic(
         code(photo_frame::encode::encoder_error),
         help(
-            "The image crate's JPEG encoder reported an error. Typical \
-             causes: out-of-memory on very large canvases, or a malformed \
-             pixel buffer. The wrapped error has the format-specific reason."
+            "jpeg-encoder reported an error. Typical causes: out-of-memory \
+             on very large canvases, or a malformed pixel buffer. The \
+             wrapped error has the format-specific reason."
         )
     )]
-    Encode(#[source] image::ImageError),
+    Encode(#[source] EncodingError),
 }
 
 impl Categorize for EncodeError {
     fn category(&self) -> Category {
         match self {
-            Self::InvalidQuality { .. } => Category::Input,
+            Self::InvalidQuality { .. } | Self::DimensionOverflow { .. } => Category::Input,
             Self::Encode(_) => Category::Encode,
         }
     }
@@ -76,7 +95,14 @@ impl Categorize for EncodeError {
 ///
 /// # Errors
 /// - [`EncodeError::InvalidQuality`] when `opts.quality` is outside 1..=100.
+/// - [`EncodeError::DimensionOverflow`] when `width` or `height` exceeds
+///   JPEG's 16-bit per-axis limit.
 /// - [`EncodeError::Encode`] when the underlying JPEG encoder fails.
+///
+/// # Panics
+/// Never. The internal `u32 → u16` conversion is gated behind the
+/// dimension checks above; the `expect` exists only to satisfy the
+/// total-function signature `TryFrom` insists on.
 #[tracing::instrument(
     level = "debug",
     name = "encode_jpeg",
@@ -92,15 +118,29 @@ pub fn jpeg(pixels: &Pixels, opts: &JpegOptions) -> Result<Vec<u8>, EncodeError>
     if !VALID_QUALITY.contains(&opts.quality) {
         return Err(EncodeError::InvalidQuality { got: opts.quality });
     }
+    let width = pixels.width();
+    let height = pixels.height();
+    if width > MAX_DIMENSION {
+        return Err(EncodeError::DimensionOverflow {
+            got: width,
+            max: MAX_DIMENSION,
+        });
+    }
+    if height > MAX_DIMENSION {
+        return Err(EncodeError::DimensionOverflow {
+            got: height,
+            max: MAX_DIMENSION,
+        });
+    }
+    // jpeg-encoder's encoder takes u16 dimensions — the checks above
+    // guarantee `try_into` succeeds. Truncation cast would be a bug.
+    let w16 = u16::try_from(width).expect("width <= u16::MAX checked above");
+    let h16 = u16::try_from(height).expect("height <= u16::MAX checked above");
+
     let rgb = drop_alpha(pixels);
     let mut out = Vec::with_capacity(rgb.len() / 4);
-    JpegEncoder::new_with_quality(&mut out, opts.quality)
-        .write_image(
-            &rgb,
-            pixels.width(),
-            pixels.height(),
-            ExtendedColorType::Rgb8,
-        )
+    JpegEncoder::new(&mut out, opts.quality)
+        .encode(&rgb, w16, h16, ColorType::Rgb)
         .map_err(EncodeError::Encode)?;
     tracing::Span::current().record("output_bytes", out.len());
     Ok(out)
@@ -157,7 +197,7 @@ mod tests {
         let err = jpeg(&p, &JpegOptions { quality: 0 }).expect_err("must reject");
         match err {
             EncodeError::InvalidQuality { got } => assert_eq!(got, 0),
-            EncodeError::Encode(_) => panic!("expected InvalidQuality, got Encode"),
+            other => panic!("expected InvalidQuality, got {other:?}"),
         }
     }
 

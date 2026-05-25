@@ -237,6 +237,29 @@ same fixture × stage matrix. Negative = faster.
 | D1 zune-jpeg JPEG decode | post-D1 | **1.11 s** (-11 % vs baseline) | **217 ms** (-19 %) | 788 ms (-2 %, noise) | 94 ms | dhat: total alloc 439 MB → 353 MB (-86 MB, zune allocates less than image-crate's jpeg-decoder); peak unchanged at 243 MB. Decode wins range from -9 % (orientation=8, IDCT not on critical path) to -23 % (landscape) — confirms zune's SIMD YCbCr→RGB is the dominant accelerator |
 | D2 fast_image_resize | post-D2 | 1.10 s (default, no change — resize not on default path) | 217 ms | 788 ms | 91 ms | **Resize itself: 438 → 113 ms (-74 %, ~4×)** on 24 MP. SNS-preset pipeline (CLI `--preset sns`) on 24 MP real Z 5: **0.47 s end-to-end** vs estimated ~0.80 s with image-crate resize. `resize_fir_lanczos3_to_sns` bench: 213 MP/s (was 55 MP/s with image-crate). rayon worker pool + SIMD per-row Lanczos3. WASM build green — fir falls back to single-thread on wasm32 |
 | C4 row-parallel compose canvas | post-C4 | **1.02 s** (-18 % vs baseline, -7 % vs D2) | 216 ms | 787 ms | **18 ms** (-86 % vs baseline, -80 % vs D2) | Single-pass row-parallel `build_canvas_with_photo` replaces the two-pass `from_pixel` + `imageops::replace` sequence. Each canvas row is dispatched to a rayon worker that fills bg + copies the photo bytes + fills the remaining bg, all in one cache-friendly walk. Compose throughput: 184 MP/s → **1.33 GP/s** (7× faster). Panorama frame: 1.79 ms → 0.30 ms (6× faster). No memory regression (the `vec![0; n]` zero-init is cheaper than `from_pixel` was) |
+| D3 jpeg-encoder JPEG output | post-D3 | **662 ms** (-47 % vs baseline, -35 % vs C4) | 216 ms | **424 ms** (-48 % vs baseline, -46 % vs C4) | 18 ms | `image::codecs::jpeg::JpegEncoder` → `jpeg_encoder::Encoder`. jpeg-encoder ships a SIMD-optimised DCT + Huffman path (AVX2 on x86_64); the swap halves encode wall-clock at the same `quality=92` setting (same 4:4:4 chroma — auto-4:2:0 only kicks in for q<90, so the win here is purely the SIMD encoder, not the format change). SNS preset (q78, auto-4:2:0): pipeline_sns 374 ms → **314 ms** (-16 %, smaller because SNS is already chroma-subsampled). The encode crate dropped its `image` dep entirely (now uses `jpeg-encoder` + the existing `photo-frame-types::Pixels`) so the runtime dep tree is tighter by one large transitive |
+
+### Aggregate (baseline → post-D3 on 24 MP real Z 5 landscape)
+
+| stage | baseline | post-D3 | total Δ |
+| --- | ---: | ---: | ---: |
+| decode | 268 ms | 216 ms | -19 % |
+| frame | 131 ms | **18 ms** | **-86 %** |
+| encode q92 | 819 ms | **424 ms** | **-48 %** |
+| **pipeline default** | **1245 ms** | **662 ms** | **-47 %** (≈ 2× wall-clock) |
+| **pipeline SNS** | **~1500–1800 ms** | **314 ms** | **~-80 %** (~5× wall-clock) |
+
+Memory profile (dhat, same input):
+* baseline total alloc 535 MB → **post-D3 ≤ 353 MB** (-34 %);
+* peak unchanged from D1 onward.
+
+The pipeline is now encode-balanced rather than encode-dominated:
+424 ms / 662 ms = **64 %** of default wall-clock, still the largest
+single stage but no longer on a different order of magnitude than
+decode (33 %). For further encode wins without breaking the
+deny.toml C-purity contract, the realistic levers are quality
+defaults (drop Standard preset to q88 → auto-4:2:0) or progressive
+JPEG (latency-shifts loading but doesn't change total encode time).
 
 ### Aggregate (baseline → post-C4 on 24 MP real Z 5 landscape)
 
