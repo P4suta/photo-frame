@@ -34,6 +34,16 @@ import {
 } from './App.styles';
 import { downloadZip } from 'client-zip';
 import { type DroppedFile, DropZone } from './DropZone';
+import { framedName, stringifyError, uint8ToBuffer } from './lib/format';
+import {
+  LONG_EDGE_OPTIONS,
+  type LongEdgeKey,
+  longEdgeKeyFor,
+  PRESETS,
+  type PresetKey,
+  sourceLongEdgeOf,
+} from './lib/long-edge';
+import { ALL_VARIANTS, type VariantKey, variantKey } from './lib/variants';
 import {
   type BatchItem,
   type BatchResult,
@@ -87,38 +97,9 @@ const CAPTION_MODES = [
   },
 ] satisfies ReadonlyArray<{ value: CaptionMode; label: string; description: string }>;
 
-/**
- * Mirror of `photo_frame::QualityPreset` — keep in sync with
- * `crates/photo-frame-types/src/preset.rs`. The Rust side is the source
- * of truth; the duplication here keeps the UI snappy without a WASM
- * round-trip for every preset click.
- */
-const PRESETS = {
-  sns: { label: 'SNS', quality: 78, maxLongEdge: 1920 as number | null },
-  standard: { label: 'Standard', quality: 92, maxLongEdge: null as number | null },
-  maximum: { label: 'Maximum', quality: 98, maxLongEdge: null as number | null },
-} as const satisfies Record<string, { label: string; quality: number; maxLongEdge: number | null }>;
-
-type PresetKey = keyof typeof PRESETS;
-
-// Long-edge size options the user can choose from. The dial-a-
-// number resize control was replaced with this segmented picker
-// because the precision wasn't doing anyone any favours — a
-// handful of recognisable display targets ("FHD", "4K", "Full")
-// communicates the intent far better than a 1-20000 px text box.
-// Source images smaller than the chosen cap are emitted at their
-// native size unchanged (WASM `max_long_edge` is a ceiling, not
-// a floor); a future iteration can grey out options the source
-// can't reach, but for now the worst case is "Full and FHD look
-// identical" — not a correctness bug.
-const LONG_EDGE_OPTIONS = {
-  full: { label: 'Full', maxLongEdge: null as number | null },
-  '4k': { label: '4K', maxLongEdge: 3840 as number | null },
-  fhd: { label: 'FHD', maxLongEdge: 1920 as number | null },
-  hd: { label: 'HD', maxLongEdge: 1280 as number | null },
-} as const satisfies Record<string, { label: string; maxLongEdge: number | null }>;
-
-type LongEdgeKey = keyof typeof LONG_EDGE_OPTIONS;
+// Quality presets + long-edge size options now live in
+// `lib/long-edge.ts` so the tables + their helpers can be unit-
+// tested without spinning up the SolidJS reactive scope.
 
 // Row state for the batch gallery. `thumbnailUrl` is the small
 // framed preview shown while the row sits queued / processing;
@@ -147,29 +128,10 @@ const THUMBNAIL_DEBOUNCE_MS = 320;
 
 type Mode = 'empty' | 'single' | 'batch';
 
-// Phase G2 — pre-render every (theme × layout × showMeta) variant in
-// the background so toggles are signal-swap fast (0 ms WASM round
-// trip). `VariantKey` strings index the cache below; `ALL_VARIANTS`
-// enumerates the 8 combinations so the prefetch loop has a fixed
-// iteration order (deterministic, easier to debug).
-type VariantKey = string;
-const variantKey = (theme: FrameTheme, layout: CaptionLayout, showMeta: boolean): VariantKey =>
-  `${theme}|${layout}|${showMeta}`;
-const ALL_VARIANTS: ReadonlyArray<{
-  theme: FrameTheme;
-  layout: CaptionLayout;
-  showMeta: boolean;
-}> = (() => {
-  const out: { theme: FrameTheme; layout: CaptionLayout; showMeta: boolean }[] = [];
-  for (const theme of ['paper', 'ink'] as const) {
-    for (const layout of ['edges', 'centered'] as const) {
-      for (const showMeta of [true, false] as const) {
-        out.push({ theme, layout, showMeta });
-      }
-    }
-  }
-  return out;
-})();
+// Variant cache key + the 8-element ALL_VARIANTS list live in
+// `lib/variants.ts`; pre-rendering the (theme × layout ×
+// showMeta) matrix in the background keeps toggles signal-swap
+// fast.
 
 export const App = () => {
   const [single, setSingle] = createSignal<DroppedFile | null>(null);
@@ -194,18 +156,6 @@ export const App = () => {
     batchFiles() !== null ? 'batch' : single() !== null ? 'single' : 'empty',
   );
 
-  // Map a preset's numeric `maxLongEdge` onto the closest
-  // `LongEdgeKey` so the segmented control above the preset
-  // can stay in sync. Equality is fine here because the
-  // preset values were intentionally aligned to the
-  // LONG_EDGE_OPTIONS table.
-  const longEdgeKeyFor = (maxLongEdge: number | null): LongEdgeKey => {
-    for (const [key, info] of Object.entries(LONG_EDGE_OPTIONS)) {
-      if (info.maxLongEdge === maxLongEdge) return key as LongEdgeKey;
-    }
-    return 'full';
-  };
-
   const applyPreset = (key: PresetKey): void => {
     setPreset(key);
     const p = PRESETS[key];
@@ -217,19 +167,10 @@ export const App = () => {
     () => LONG_EDGE_OPTIONS[longEdge()].maxLongEdge,
   );
 
-  // The source long edge — single mode: the loaded image's
-  // measured long edge; batch mode: the smallest among the
-  // batch (so the cap won't promise more resolution than the
-  // weakest source can deliver). Null in empty mode.
-  const sourceLongEdge = createMemo<number | null>(() => {
-    const s = single();
-    if (s) return s.longEdge;
-    const files = batchFiles();
-    if (files && files.length > 0) {
-      return Math.min(...files.map((f) => f.longEdge));
-    }
-    return null;
-  });
+  // `sourceLongEdge` lives in `lib/long-edge.ts` so the
+  // single-vs-batch min-fold logic + the empty-batch guard
+  // are pinned by `sourceLongEdgeOf` unit tests.
+  const sourceLongEdge = createMemo<number | null>(() => sourceLongEdgeOf(single(), batchFiles()));
 
   // Auto-demote: if a Long-edge option larger than the source
   // is currently selected, snap to the largest valid option.
@@ -1109,12 +1050,10 @@ const Segmented = <T extends string>(props: {
   </div>
 );
 
-function framedName(original: string): string {
-  const dot = original.lastIndexOf('.');
-  const stem = dot >= 0 ? original.slice(0, dot) : original;
-  return `${stem}_framed.jpg`;
-}
-
+// `framedName`, `uint8ToBuffer`, and `stringifyError` now live
+// in `lib/format.ts`; only the DOM-touching `triggerDownload`
+// stays inline since it has no business in the pure-function
+// module.
 function triggerDownload(blob: Blob, name: string): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
@@ -1122,17 +1061,4 @@ function triggerDownload(blob: Blob, name: string): void {
   anchor.download = name;
   anchor.click();
   URL.revokeObjectURL(url);
-}
-
-function uint8ToBuffer(u8: Uint8Array): ArrayBuffer {
-  // TS's Blob constructor rejects Uint8Array<ArrayBufferLike> directly;
-  // copy into a fresh ArrayBuffer so the type is unambiguous.
-  const buffer = new ArrayBuffer(u8.byteLength);
-  new Uint8Array(buffer).set(u8);
-  return buffer;
-}
-
-function stringifyError(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
 }

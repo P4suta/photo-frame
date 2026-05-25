@@ -10,6 +10,7 @@ import {
   galleryThumbImg,
   galleryThumbPlaceholder,
 } from './Gallery.styles';
+import { statusLabel } from './lib/format';
 
 /**
  * Per-row state the gallery renders. Mirrors `BatchRow` in
@@ -36,18 +37,8 @@ type Props = {
   rows: readonly GalleryRow[];
 };
 
-const statusLabel = (status: GalleryRow['status']): string => {
-  switch (status) {
-    case 'queued':
-      return 'Queued';
-    case 'processing':
-      return 'Processing';
-    case 'done':
-      return '✓ Done';
-    case 'error':
-      return '✗ Error';
-  }
-};
+// `statusLabel` lives in `lib/format.ts` and is shared between
+// the gallery and any future row-status surface.
 
 export const Gallery = (props: Props): JSX.Element => (
   <ul class={gallery}>
