@@ -5,11 +5,13 @@ import {
   CHORD_VISIBLE_STEPS,
   chordSegment,
   chordStateAt,
+  extensionSegments,
   goldenRectangles,
   K,
   logSpiralPoint,
   PHI,
   POLE,
+  type Rectangle,
   RHO0,
 } from './golden-spiral';
 
@@ -221,6 +223,117 @@ describe('chord segment rendering geometry', () => {
         x: va.x + 0.4 * (vb.x - va.x),
         y: va.y + 0.4 * (vb.y - va.y),
       });
+    }
+  });
+});
+
+describe('extension-line geometry', () => {
+  // Constructed inner / outer rectangles to test purely on
+  // axis-aligned geometry without depending on the φ-nested
+  // emission order.
+  const outer: Rectangle = [
+    { x: 0, y: 0 },
+    { x: 10, y: 0 },
+    { x: 10, y: 10 },
+    { x: 0, y: 10 },
+  ];
+  const innerCentred: Rectangle = [
+    { x: 2, y: 3 },
+    { x: 7, y: 3 },
+    { x: 7, y: 8 },
+    { x: 2, y: 8 },
+  ];
+
+  test('returns exactly 4 segments (one per inner side)', () => {
+    expect(extensionSegments(innerCentred, outer)).toHaveLength(4);
+  });
+
+  test('left and right segments are vertical at the inner x bounds', () => {
+    const [left, right] = extensionSegments(innerCentred, outer);
+    expect(left).toBeDefined();
+    expect(right).toBeDefined();
+    if (!left || !right) return;
+    // Left side at x = 2 spans the full outer y range
+    expect(left.start.x).toBe(2);
+    expect(left.end.x).toBe(2);
+    expect(left.start.y).toBe(0);
+    expect(left.end.y).toBe(10);
+    // Right side at x = 7
+    expect(right.start.x).toBe(7);
+    expect(right.end.x).toBe(7);
+    expect(right.start.y).toBe(0);
+    expect(right.end.y).toBe(10);
+  });
+
+  test('top and bottom segments are horizontal at the inner y bounds', () => {
+    const [, , top, bottom] = extensionSegments(innerCentred, outer);
+    expect(top).toBeDefined();
+    expect(bottom).toBeDefined();
+    if (!top || !bottom) return;
+    // Top at y = 3 spans the full outer x range
+    expect(top.start.y).toBe(3);
+    expect(top.end.y).toBe(3);
+    expect(top.start.x).toBe(0);
+    expect(top.end.x).toBe(10);
+    // Bottom at y = 8
+    expect(bottom.start.y).toBe(8);
+    expect(bottom.end.y).toBe(8);
+    expect(bottom.start.x).toBe(0);
+    expect(bottom.end.x).toBe(10);
+  });
+
+  test('inner side that coincides with an outer side collapses to that side', () => {
+    // Inner shares the outer's left and top sides (snug corner)
+    const innerCorner: Rectangle = [
+      { x: 0, y: 0 },
+      { x: 4, y: 0 },
+      { x: 4, y: 4 },
+      { x: 0, y: 4 },
+    ];
+    const segs = extensionSegments(innerCorner, outer);
+    expect(segs).toBeDefined();
+    const [left, , top] = segs;
+    if (!left || !top) return;
+    // Left side at x = 0 is just the outer left edge — segment
+    // sits at (0, 0)–(0, 10), zero-width but full-height.
+    expect(left.start.x).toBe(0);
+    expect(left.end.x).toBe(0);
+    // Top side at y = 0 is the outer top edge — (0, 0)–(10, 0)
+    expect(top.start.y).toBe(0);
+    expect(top.end.y).toBe(0);
+  });
+
+  test('works on a φ-nested rectangle from goldenRectangles', () => {
+    // Smoke check that the function composes with the real
+    // geometry source — the second φ-rectangle ought to extend
+    // through the first (outermost) one.
+    const rects = goldenRectangles(0, 4);
+    const r0 = rects[0];
+    const r1 = rects[1];
+    expect(r0).toBeDefined();
+    expect(r1).toBeDefined();
+    if (!r0 || !r1) return;
+    const segs = extensionSegments(r1, r0);
+    expect(segs).toHaveLength(4);
+    // Each segment endpoint must touch one of r0's axis-aligned
+    // bounds — the extension can't escape the outer rect.
+    const r0Bbox = {
+      left: Math.min(...r0.map((p) => p.x)),
+      right: Math.max(...r0.map((p) => p.x)),
+      top: Math.min(...r0.map((p) => p.y)),
+      bottom: Math.max(...r0.map((p) => p.y)),
+    };
+    const eps = 1e-9;
+    for (const seg of segs) {
+      // Vertical segment → x is constant, y spans the outer
+      // vertical bounds. Horizontal segment is the mirror.
+      if (Math.abs(seg.start.x - seg.end.x) < eps) {
+        expect(Math.abs(seg.start.y - r0Bbox.top)).toBeLessThan(eps);
+        expect(Math.abs(seg.end.y - r0Bbox.bottom)).toBeLessThan(eps);
+      } else {
+        expect(Math.abs(seg.start.x - r0Bbox.left)).toBeLessThan(eps);
+        expect(Math.abs(seg.end.x - r0Bbox.right)).toBeLessThan(eps);
+      }
     }
   });
 });

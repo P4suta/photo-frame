@@ -4,6 +4,7 @@ import {
   CHORD_VISIBLE_STEPS,
   chordSegment,
   chordStateAt,
+  extensionSegments,
   goldenRectangles,
   K,
   logSpiralPoint,
@@ -43,13 +44,16 @@ import {
 const STEPS_OUT = 8;
 const STEPS_IN = 60;
 
-// Starting θ — the pencil enters from the pole as a sub-pixel
-// dot (at θ = -7π the radius is RHO0 · φ⁻¹⁴ ≈ RHO0 · 0.00086,
-// well below 1 px on any realistic canvas size) and grows out
-// of the centre over the first ~8 s before it becomes visibly
-// distinct, hitting the on-screen target radius at θ = 0
-// (≈ 31.5 s) where the steady-state self-similar loop begins.
-const TH0 = -7 * Math.PI;
+// Starting θ — picked so the very first frame already lands
+// inside the steady-state loop with a full chord/rectangle
+// window populated. The wrap maths is `scale = baseScale ·
+// exp(−K · thR)` with `thR ∈ [0, 2π)`, so an "intro" where
+// `thR < 0` and the rectangles freeze is gone by construction;
+// the pencil is at its on-screen radius from frame 0. TH0 is
+// any multiple of π/2 large enough that the rolling window
+// `tipChordIndex − visibleSteps … tipChordIndex` only references
+// rectangle indices that exist (≥ 0).
+const TH0 = (CHORD_VISIBLE_STEPS + 1) * (Math.PI / 2);
 
 // One full outward turn (2π) takes ANGULAR_PERIOD_S seconds. 9 s
 // matches the reference HTML's tempo — fast enough that the
@@ -71,18 +75,6 @@ const DTH = 0.022;
 const TIP_DOT_R_PX = 2;
 const SPIRAL_STROKE_PX = 1.4;
 const RECT_STROKE_PX = 1;
-// Show rectangles out to one full turn ahead of the pencil tip
-// (the spiral grows by exactly φ⁴ per 2π turn, so multiplying
-// the tip radius by φ⁴ keeps roughly one turn's worth of
-// upcoming vertices visible). This lets the viewer read the
-// next vertex as a target the pencil is heading toward, instead
-// of only seeing the rectangles after they've already been
-// traced. The 1.06 used in the reference HTML hides everything
-// past the tip — that's the wrong default for the empty-state
-// decoration, where the upcoming vertices *are* the point.
-const PHI_POW_4 = 6.854_101_966_249_685;
-const RECT_TIP_SLACK = PHI_POW_4;
-const RECT_MIN_SIDE_PX = 2; // below this, the rect would alias
 const PENCIL_INK_THRESHOLD_PX = 0.4; // inner stroke clip (anti-aliased
 // near-pole limit)
 
@@ -229,12 +221,18 @@ export const GoldenSpiral = (): JSX.Element => {
       }
       prevThTip = thTip;
 
-      // Wrap θ by 2π only after we leave the intro phase (thTip
-      // negative). The φ⁴-self-similarity makes the wrap
-      // visually continuous.
-      const thR = thTip < 0 ? thTip : thTip % TWO_PI;
-      const scale = baseScale * Math.exp(-K * Math.max(0, thR));
-      const tipR = scale * RHO0 * Math.exp(K * thR);
+      // Wrap θ into [0, 2π) unconditionally — the renderer
+      // does not have an "intro" branch anymore. The φ⁴ self-
+      // similarity makes wrap → wrap visually continuous, and
+      // applying the same scale law for the first frame as
+      // every other one means the on-screen behaviour at t=0
+      // already matches the steady-state loop.
+      const thR = ((thTip % TWO_PI) + TWO_PI) % TWO_PI;
+      const scale = baseScale * Math.exp(-K * thR);
+      // (tipR = scale · RHO0 · exp(K · thR) is identically
+      // `baseScale · RHO0` under the wrap law, i.e. constant —
+      // so we don't compute it; the pencil sits at that fixed
+      // on-screen radius every frame.)
 
       // Inner sample-start — clip the polyline at the θ where
       // its spiral radius would fall below the ink-threshold
@@ -249,35 +247,63 @@ export const GoldenSpiral = (): JSX.Element => {
 
       ctx.clearRect(0, 0, W, H);
 
-      // Rectangles — revealed once the pencil tip reaches them.
+      // Rectangles + extension lines — each nested rectangle is
+      // tied to a spiral vertex (rect i ↔ V_i at θ = i·π/2) so
+      // the rectangle's 4 sides AND the extension lines through
+      // its parent (= continuations of the inner sides to the
+      // parent rect's edges) all share one animation phase.
+      // chordStateAt() drives both: `growing` and `shrinking`
+      // map to opacity 0..1 / 1..0 so the whole rectangle (and
+      // its 4 extension lines) fade in as the pencil arrives,
+      // hold full opacity for `CHORD_VISIBLE_STEPS` further
+      // quarter-turns, then fade back out. Outside that window
+      // the rectangle isn't drawn at all — the self-similar
+      // wrap means another, smaller rectangle is taking its
+      // on-screen place anyway.
+      //
+      // We iterate a sliding window of (visibleSteps + 2)
+      // rectangles around `tipChordIndex` so every visible
+      // rect is touched exactly once. Using the *absolute*
+      // pencil θ (not the wrapped thR) for the chord state
+      // means each rect index has a single monotonic life
+      // cycle across the entire run — no wrap-edge artefacts.
+      const tipChordIndex = Math.floor(thTip / HALF_PI);
+      const rectIndexMin = tipChordIndex - CHORD_VISIBLE_STEPS;
+      const rectIndexMax = tipChordIndex;
       ctx.strokeStyle = strokeFaint;
       ctx.lineWidth = RECT_STROKE_PX;
-      ctx.beginPath();
-      for (const q of rects) {
-        const px0 = mx(q[0]);
-        const py0 = my(q[0]);
-        const px1 = mx(q[1]);
-        const py1 = my(q[1]);
-        const px2 = mx(q[2]);
-        const py2 = my(q[2]);
-        const px3 = mx(q[3]);
-        const py3 = my(q[3]);
-        const sideLen = Math.hypot(px1 - px0, py1 - py0);
-        const dists = [
-          Math.hypot(px0 - cx, py0 - cy),
-          Math.hypot(px1 - cx, py1 - cy),
-          Math.hypot(px2 - cx, py2 - cy),
-          Math.hypot(px3 - cx, py3 - cy),
-        ];
-        const maxDist = Math.max(...dists);
-        if (maxDist > tipR * RECT_TIP_SLACK || sideLen < RECT_MIN_SIDE_PX) continue;
-        ctx.moveTo(px0, py0);
-        ctx.lineTo(px1, py1);
-        ctx.lineTo(px2, py2);
-        ctx.lineTo(px3, py3);
+      for (let i = rectIndexMin; i <= rectIndexMax; i++) {
+        if (i < 0 || i >= rects.length) continue;
+        const rect = rects[i];
+        if (!rect) continue;
+        const state = chordStateAt(i * HALF_PI, thTip);
+        if (state.phase === 'hidden') continue;
+        // growing/shrinking → fraction is the displayed alpha.
+        // full → solid stroke.
+        const alpha = state.phase === 'full' ? 1 : state.fraction;
+        if (alpha <= 0) continue;
+        ctx.globalAlpha = alpha;
+        // 4 sides of the rectangle itself.
+        ctx.beginPath();
+        ctx.moveTo(mx(rect[0]), my(rect[0]));
+        ctx.lineTo(mx(rect[1]), my(rect[1]));
+        ctx.lineTo(mx(rect[2]), my(rect[2]));
+        ctx.lineTo(mx(rect[3]), my(rect[3]));
         ctx.closePath();
+        ctx.stroke();
+        // 4 extension lines through the immediate parent rect.
+        // For the outermost (i = 0) there is no parent — skip.
+        const parent = i > 0 ? rects[i - 1] : undefined;
+        if (parent) {
+          ctx.beginPath();
+          for (const seg of extensionSegments(rect, parent)) {
+            ctx.moveTo(mx(seg.start), my(seg.start));
+            ctx.lineTo(mx(seg.end), my(seg.end));
+          }
+          ctx.stroke();
+        }
       }
-      ctx.stroke();
+      ctx.globalAlpha = 1;
 
       // Logarithmic spiral, from inner sample-start out to tip.
       ctx.strokeStyle = strokeDim;
