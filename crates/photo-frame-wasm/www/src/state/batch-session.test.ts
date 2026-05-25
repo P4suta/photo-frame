@@ -99,7 +99,7 @@ describe('createBatchSession', () => {
       const session = createBatchSession({
         files,
         settings: fakeSettings(),
-        setStatus: () => {},
+        setStatus: () => undefined,
         workerTarget: makeFakeWorker(),
       });
       expect(session.state.rows()).toEqual([]);
@@ -115,7 +115,7 @@ describe('createBatchSession', () => {
         const session = createBatchSession({
           files,
           settings: fakeSettings(),
-          setStatus: () => {},
+          setStatus: () => undefined,
           workerTarget: makeFakeWorker(),
         });
         setFiles([file('a.jpg'), file('b.jpg')]);
@@ -139,7 +139,7 @@ describe('createBatchSession', () => {
         createBatchSession({
           files,
           settings: fakeSettings(),
-          setStatus: () => {},
+          setStatus: () => undefined,
           workerTarget: worker,
         });
         setFiles([file('a.jpg')]);
@@ -167,7 +167,7 @@ describe('createBatchSession', () => {
         const session = createBatchSession({
           files,
           settings: fakeSettings(),
-          setStatus: () => {},
+          setStatus: () => undefined,
           workerTarget: worker,
         });
         setFiles([file('a.jpg'), file('b.jpg')]);
@@ -175,7 +175,7 @@ describe('createBatchSession', () => {
         await vi.advanceTimersByTimeAsync(400);
         await Promise.resolve();
         await Promise.resolve();
-        worker.reply({ kind: 'progress', key: 'b.jpg', index: 0, total: 2 });
+        worker.reply({ kind: 'progress', key: 'b.jpg', index: 0, total: 2, percent: 50 });
         expect(session.state.rows().find((r) => r.key === 'b.jpg')?.status).toBe('processing');
         expect(session.state.rows().find((r) => r.key === 'a.jpg')?.status).toBe('queued');
         dispose();
@@ -192,7 +192,7 @@ describe('createBatchSession', () => {
         const session = createBatchSession({
           files,
           settings: fakeSettings(),
-          setStatus: () => {},
+          setStatus: () => undefined,
           workerTarget: worker,
         });
         setFiles([file('a.jpg')]);
@@ -223,7 +223,7 @@ describe('createBatchSession', () => {
         const session = createBatchSession({
           files,
           settings: fakeSettings(),
-          setStatus: () => {},
+          setStatus: () => undefined,
           workerTarget: worker,
         });
         setFiles([file('a.jpg')]);
@@ -250,7 +250,7 @@ describe('createBatchSession', () => {
         const session = createBatchSession({
           files,
           settings: fakeSettings(),
-          setStatus: () => {},
+          setStatus: () => undefined,
           workerTarget: worker,
         });
         setFiles([file('a.jpg')]);

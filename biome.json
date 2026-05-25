@@ -27,14 +27,29 @@
       "style": {
         "noNonNullAssertion": "error",
         "useConst": "error",
-        "useTemplate": "error"
+        "useTemplate": "error",
+        "noParameterAssign": "error",
+        "useShorthandAssign": "error",
+        "useImportType": "error",
+        "useExportType": "error"
       },
       "suspicious": {
-        "noConsole": { "level": "warn", "options": { "allow": ["log"] } }
+        "noConsole": "error",
+        "noExplicitAny": "error",
+        "noEmptyBlockStatements": "error"
       },
       "correctness": {
         "noUnusedVariables": "error",
-        "noUnusedImports": "error"
+        "noUnusedImports": "error",
+        "noUnusedFunctionParameters": "error",
+        "noUnusedPrivateClassMembers": "error"
+      },
+      "complexity": {
+        "noUselessSwitchCase": "error",
+        "useArrowFunction": "error"
+      },
+      "performance": {
+        "noAccumulatingSpread": "error"
       }
     }
   },

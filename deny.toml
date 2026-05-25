@@ -75,11 +75,14 @@ unused-allowed-license = "allow"
 confidence-threshold = 0.93
 
 [advisories]
-# Advisories are a separate concern from C-purity; we let `cargo deny check
-# advisories` warn but gate CI only on `bans`.
-yanked       = "warn"
-unmaintained = "workspace"
-ignore       = []
+# Advisories are gated explicitly. `vulnerability = "deny"` is the
+# cargo-deny default but we spell it out so a future config rewrite
+# can't silently soften it; the rest tightens what cargo-deny's
+# default leaves at "warn".
+vulnerability = "deny"
+yanked        = "deny"
+unmaintained  = "workspace"
+ignore        = []
 
 [sources]
 unknown-registry = "deny"

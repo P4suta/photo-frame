@@ -14,7 +14,12 @@ const themeOptions: SegmentedOption<Picks>[] = [
 describe('<Segmented>', () => {
   test('renders one button per option with the option label', () => {
     const { getByRole, getAllByRole } = render(() => (
-      <Segmented options={themeOptions} value="paper" onChange={() => {}} ariaLabel="Theme" />
+      <Segmented
+        options={themeOptions}
+        value="paper"
+        onChange={() => undefined}
+        ariaLabel="Theme"
+      />
     ));
     expect(getByRole('radiogroup', { name: 'Theme' })).toBeTruthy();
     const buttons = getAllByRole('radio');
@@ -29,7 +34,7 @@ describe('<Segmented>', () => {
     // the recipe's `active` variant are tied to the same prop,
     // so a passing test here protects both.
     const { getAllByRole } = render(() => (
-      <Segmented options={themeOptions} value="ink" onChange={() => {}} ariaLabel="Theme" />
+      <Segmented options={themeOptions} value="ink" onChange={() => undefined} ariaLabel="Theme" />
     ));
     const [white, black] = getAllByRole('radio');
     expect(white?.getAttribute('aria-checked')).toBe('false');
@@ -73,7 +78,7 @@ describe('<Segmented>', () => {
       { value: 'ink', label: 'Black', title: 'Black frame, light text' },
     ];
     const { getByRole } = render(() => (
-      <Segmented options={options} value="paper" onChange={() => {}} ariaLabel="Theme" />
+      <Segmented options={options} value="paper" onChange={() => undefined} ariaLabel="Theme" />
     ));
     expect(getByRole('radio', { name: 'White' }).getAttribute('title')).toBe(
       'White frame, dark text',

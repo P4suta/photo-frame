@@ -70,7 +70,7 @@ describe('createPreviewSession', () => {
       const preview = createPreviewSession({
         source,
         settings: fakeSettings(theme, layout, showMeta),
-        setStatus: () => {},
+        setStatus: () => undefined,
       });
       expect(preview.state.pixels()).toBeNull();
       expect(preview.state.busy()).toBe(false);
@@ -102,7 +102,7 @@ describe('createPreviewSession', () => {
         const preview = createPreviewSession({
           source,
           settings: fakeSettings(theme, layout, showMeta),
-          setStatus: () => {},
+          setStatus: () => undefined,
         });
 
         setSource(file('a.jpg'));
@@ -146,7 +146,7 @@ describe('createPreviewSession', () => {
         const preview = createPreviewSession({
           source,
           settings: fakeSettings(theme, layout, showMeta),
-          setStatus: () => {},
+          setStatus: () => undefined,
         });
 
         setSource(file('a.jpg'));

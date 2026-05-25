@@ -16,6 +16,11 @@ import { semanticTokens, tokens } from './panda/tokens';
 //
 // `strictTokens: true` makes any token typo a compile-time error —
 // the whole reason we picked Panda over hand-rolled CSS variables.
+// `strictPropertyValues: true` goes one step further: every CSS
+// property value must come from the declared token vocabulary too,
+// so a stray `padding: '10px'` (literal length rather than a
+// `phi.*` token) fails at codegen time. Escape hatch is the
+// `[...]` bracket syntax for genuinely token-less values.
 // `hash: true` produces stable, conflict-free class names in
 // production. `preflight: true` ships a normalize/reset at the
 // bottom of the cascade so we don't carry one in `global.css`.
@@ -27,6 +32,7 @@ import { semanticTokens, tokens } from './panda/tokens';
 export default defineConfig({
   preflight: true,
   strictTokens: true,
+  strictPropertyValues: true,
   hash: true,
 
   include: ['./src/**/*.{ts,tsx}'],

@@ -120,6 +120,41 @@ missing_debug_implementations = "warn"
 unreachable_pub               = "warn"
 unused_qualifications         = "warn"
 elided_lifetimes_in_paths     = "warn"
+# Every public item must carry a doc comment. Pairs with `just docs-check`
+# (which sets `RUSTDOCFLAGS=-D warnings`) so missing docs fail CI the same
+# way clippy lints do. Internal `pub(crate)` items are exempt.
+missing_docs = "warn"
+# Additional rustc lints that catch specific bug classes the above do not:
+#   - `unused_extern_crates`  : a `Cargo.toml` dep that's never imported
+#   - `unused_lifetimes`      : declared but never bound, often a copy-paste relic
+#   - `unused_import_braces`  : `use foo::{Bar}` should be `use foo::Bar`
+#   - `single_use_lifetimes`  : explicit lifetime used once → can be elided
+#   - `trivial_casts`         : `expr as &T` where the value already has type `&T`
+#   - `trivial_numeric_casts` : `0_u32 as u32` (no-op)
+#   - `noop_method_call`      : `.clone()` on a `&&T` (clones the reference)
+#
+# Considered but not enabled: `let_underscore_drop` (catches
+# `let _ = guard;` silently dropping a `Drop` value). The two existing
+# `let _ = Renderer::new(...)` / `let _ = Lens { ... }` smoke-test
+# patterns are intentional construction-doesn't-panic checks; flipping
+# them to `drop(...)` is a refactor that should land alongside the
+# author touching those tests, not silently dragged in by a tooling
+# bump. Re-enable when both sites are converted.
+unused_extern_crates  = "warn"
+unused_lifetimes      = "warn"
+unused_import_braces  = "warn"
+single_use_lifetimes  = "warn"
+trivial_casts         = "warn"
+trivial_numeric_casts = "warn"
+noop_method_call      = "warn"
+
+[workspace.lints.rustdoc]
+# Broken `[link]` or `[`type`]` references in doc comments must not silently
+# 404 the rendered HTML. Together with `RUSTDOCFLAGS=-D warnings` in
+# `just docs-check`, this gates merges on a clean doc build.
+broken_intra_doc_links  = "warn"
+private_intra_doc_links = "warn"
+invalid_html_tags       = "warn"
 
 [workspace.lints.clippy]
 # Strict by default. NO pre-emptive allows — when a lint fires, fix the root cause.
@@ -128,6 +163,18 @@ elided_lifetimes_in_paths     = "warn"
 all      = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 nursery  = { level = "warn", priority = -1 }
+# Selected `restriction` lints — the group as a whole is too opinionated to
+# enable wholesale (it would fire on every line), but these four catch
+# concrete leftovers / footguns that pedantic+nursery don't cover:
+#   - `dbg_macro`         : forgotten `dbg!()` debug print
+#   - `todo`              : forgotten `todo!()` placeholder
+#   - `unimplemented`     : forgotten `unimplemented!()` stub
+#   - `panic_in_result_fn`: a `panic!` inside a fn that returns `Result` —
+#                           the panic should have been a `?` or an Err variant
+dbg_macro          = "warn"
+todo               = "warn"
+unimplemented      = "warn"
+panic_in_result_fn = "warn"
 # Single workspace-level lint exception, justified:
 # `redundant_pub_crate` (nursery) and `unreachable_pub` (rustc) give contradictory
 # advice for `pub(crate) item` inside a private module. We deliberately keep

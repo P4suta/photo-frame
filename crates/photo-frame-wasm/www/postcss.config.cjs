@@ -4,6 +4,6 @@
 // which emits the `styled-system/` package the TSX side imports from.
 module.exports = {
   plugins: {
-    "@pandacss/dev/postcss": {},
+    '@pandacss/dev/postcss': {},
   },
 };

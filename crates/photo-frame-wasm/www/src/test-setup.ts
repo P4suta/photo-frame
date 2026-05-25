@@ -18,9 +18,16 @@ if (typeof window !== 'undefined') {
   // don't crash at construction time.
   if (typeof globalThis.ResizeObserver === 'undefined') {
     class ResizeObserverStub {
-      observe(): void {}
-      unobserve(): void {}
-      disconnect(): void {}
+      observe(): void {
+        // No-op: tests that care about the layout side of ResizeObserver
+        // install their own per-test mock via `vi.fn()`.
+      }
+      unobserve(): void {
+        // No-op: see `observe`.
+      }
+      disconnect(): void {
+        // No-op: see `observe`.
+      }
     }
     globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver;
   }

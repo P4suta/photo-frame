@@ -9,7 +9,7 @@ describe('<AppHeader>', () => {
   test('renders the status text reactively', () => {
     const [status, setStatus] = createSignal('idle');
     const { getByText } = render(() => (
-      <AppHeader status={status} disabled={() => false} onResetToEmpty={() => {}} />
+      <AppHeader status={status} disabled={() => false} onResetToEmpty={() => undefined} />
     ));
     expect(getByText('idle')).toBeTruthy();
     setStatus('framing…');
@@ -18,7 +18,7 @@ describe('<AppHeader>', () => {
 
   test('wordmark is disabled and untitled when `disabled` is true (empty mode)', () => {
     const { getByRole } = render(() => (
-      <AppHeader status={() => ''} disabled={() => true} onResetToEmpty={() => {}} />
+      <AppHeader status={() => ''} disabled={() => true} onResetToEmpty={() => undefined} />
     ));
     const wm = getByRole('button', { name: 'Start over' }) as HTMLButtonElement;
     expect(wm.disabled).toBe(true);
@@ -37,7 +37,7 @@ describe('<AppHeader>', () => {
 
   test('enabled wordmark surfaces the "Start over" tooltip', () => {
     const { getByRole } = render(() => (
-      <AppHeader status={() => ''} disabled={() => false} onResetToEmpty={() => {}} />
+      <AppHeader status={() => ''} disabled={() => false} onResetToEmpty={() => undefined} />
     ));
     const wm = getByRole('button', { name: 'Start over' }) as HTMLButtonElement;
     expect(wm.disabled).toBe(false);
