@@ -741,13 +741,26 @@ export const App = () => {
     );
   };
 
-  const onDownloadRow = (row: BatchRow): void => {
-    if (!row.resultUrl) return;
-    const anchor = document.createElement('a');
-    anchor.href = row.resultUrl;
-    anchor.download = framedName(row.name);
-    anchor.click();
+  // Trigger one synthetic `<a download>` click per ready row.
+  // The browser will surface a "site wants to download multiple
+  // files" permission prompt the first time; once allowed, the
+  // rest stream to the user's download folder named by their
+  // original filename + `_framed`.
+  const onDownloadAll = (): void => {
+    for (const row of batchRows()) {
+      if (row.status !== 'done' || !row.resultUrl) continue;
+      const anchor = document.createElement('a');
+      anchor.href = row.resultUrl;
+      anchor.download = framedName(row.name);
+      anchor.click();
+    }
   };
+
+  // Memoised count of rows whose framed output is ready, used
+  // by the sidebar "Download all" button's label / disabled
+  // state. `total` lets the label read "Download all (4/10)"
+  // while the rest are still encoding.
+  const batchDoneCount = createMemo(() => batchRows().filter((r) => r.status === 'done').length);
 
   // ── render ───────────────────────────────────────────────────────
   return (
@@ -794,7 +807,7 @@ export const App = () => {
 
         <Show when={mode() === 'batch'}>
           <div class={stageBatch}>
-            <Gallery rows={batchRows()} onDownload={onDownloadRow} />
+            <Gallery rows={batchRows()} />
           </div>
         </Show>
       </main>
@@ -839,11 +852,23 @@ export const App = () => {
             </button>
           </Show>
 
-          {/* Batch mode no longer needs a "Process N files"
-              button — processing kicks off automatically on
-              drop / setting change, and the gallery card
-              buttons flip from disabled to enabled the moment
-              each row's encode completes. */}
+          <Show when={mode() === 'batch'}>
+            {/* Processing runs in the background as soon as
+                files are dropped; this is just the harvest
+                button. Label flips through "Download all (N/M)"
+                as rows complete, becomes a plain "Download all"
+                once every row's ready. */}
+            <button
+              type="button"
+              class={button({ intent: 'primary' })}
+              disabled={batchDoneCount() === 0}
+              onClick={onDownloadAll}
+            >
+              {batchDoneCount() === batchRows().length
+                ? `Download all (${batchRows().length})`
+                : `Download all (${batchDoneCount()}/${batchRows().length})`}
+            </button>
+          </Show>
 
           <footer class={sidebarFooter}>
             <a href="https://github.com/P4suta/photo-frame">Source</a> ·{' '}

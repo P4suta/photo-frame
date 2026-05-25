@@ -124,37 +124,6 @@ export const galleryCardStatus = css({
   },
 });
 
-// Whole-card click target for downloads — the card becomes a
-// button once its row reaches `done`. Hover bumps the card's
-// border to the strong weight; there's no elevation tier to
-// shift to in the new strict-monochrome palette.
-export const galleryCardButton = css({
-  appearance: 'none',
-  background: 'transparent',
-  border: 'none',
-  font: 'inherit',
-  textAlign: 'inherit',
-  // `currentColor` keeps the button text aligned with the
-  // surrounding card colour; `inherit` isn't in the colour-token
-  // namespace so the escape hatch flags the CSS-keyword nature.
-  color: '[inherit]',
-  cursor: 'pointer',
-  padding: '0',
-  width: 'full',
-  // Hover affordance — a subtle opacity drop on the card,
-  // monochrome, no bg shift. Suppressed while the row is still
-  // processing (button is disabled there) so the card doesn't
-  // imply clickability before the result is ready.
-  transition: '[opacity 120ms ease]',
-  _hover: {
-    opacity: 0.75,
-  },
-  _disabled: {
-    cursor: 'default',
-    _hover: { opacity: 1 },
-  },
-  _focusVisible: {
-    outline: '[2px solid {colors.fg.default}]',
-    outlineOffset: '[2px]',
-  },
-});
+// (The per-card download button was removed — batch downloads
+// are funnelled through the single "Download all" affordance in
+// the sidebar instead. Cards stay passive `<li>`s.)
