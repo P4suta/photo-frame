@@ -83,21 +83,57 @@ jobs:
           path: artifacts/bench/runtime/pr-${{ github.run_id }}/
           retention-days: 14
 
-  # iai-callgrind hard-gate. Skipped today because the runner / valgrind
-  # bootstrap on every PR adds ~3 min for ~6 bench cases. Phase A3.2
-  # turns this on once we've confirmed the icount.rs harness is stable
-  # against the realistic fixture set.
-  #
-  # icount:
-  #   runs-on: ubuntu-latest
-  #   timeout-minutes: 30
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: dtolnay/rust-toolchain@stable
-  #     - run: sudo apt-get install -y valgrind
-  #     - uses: taiki-e/install-action@v2
-  #       with:
-  #         tool: just,cargo-binstall
-  #     - run: cargo binstall iai-callgrind-runner
-  #     - run: just bench-icount --save-baseline pr
-  #     - run: just bench-icount --baseline pr --compare-baseline main
+  # iai-callgrind hard-gate. Adds ~3 min per PR for valgrind bootstrap
+  # + 6 bench cases × 2 runs (main baseline + PR comparison). Hardware-
+  # independent so the +5% Ir (instructions) threshold is meaningful
+  # across runners.
+  icount:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need the full history so we can `git checkout` the PR's
+          # merge base for the baseline run.
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Distinct cache namespace so we don't poach the wall-clock
+          # bench cache from `divan` above.
+          shared-key: icount-${{ runner.os }}
+
+      - name: Install valgrind (iai-callgrind backend)
+        run: sudo apt-get install -y --no-install-recommends valgrind
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,cargo-binstall
+
+      - name: Install iai-callgrind-runner
+        run: cargo binstall --no-confirm iai-callgrind-runner
+
+      - name: Baseline run on PR's merge base
+        # `--save-baseline=main` writes target/iai/.../main/ which the
+        # comparison step below reads. `=` form is mandatory — the
+        # runner's clap config sets `require_equals = true` on this arg.
+        run: |
+          set -e
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          git checkout "$BASE_SHA"
+          just bench-icount --save-baseline=main
+
+      - name: PR run with regression gate
+        # `--baseline=main` reads the saved baseline and compares.
+        # `--callgrind-limits='ir=5%'` sets the regression threshold:
+        # any bench case whose Ir (instructions retired) grows by more
+        # than 5 % vs main triggers a failure under `--regression-fail-fast`.
+        run: |
+          set -e
+          git checkout "${{ github.sha }}"
+          just bench-icount \
+            --baseline=main \
+            --callgrind-limits='ir=5%' \
+            --regression-fail-fast
