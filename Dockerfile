@@ -172,7 +172,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
         cargo-chef \
         samply \
         inferno \
-        iai-callgrind-runner
+        iai-callgrind-runner \
+        bacon \
+        cargo-llvm-cov \
+        cargo-outdated \
+        cargo-msrv
 
 # npm-published tooling. BUN_INSTALL=/usr/local routes the -g binaries
 # to /usr/local/bin (same reasoning as the bun installer above — kept

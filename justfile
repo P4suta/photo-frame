@@ -1,17 +1,22 @@
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 set positional-arguments
 
-# Route bun-driven commands through the dev container so the host
-# doesn't need bun installed locally. The container ships bun + biome
-# (see Dockerfile) and mounts the workspace as a bind mount, so the
-# `crates/photo-frame-wasm/www/` source files are shared with the
-# host editor verbatim. `node_modules/` lives in a named volume
-# (`node-cache`, see docker-compose.yml) so installs survive
-# container restarts and don't litter the host filesystem.
+# Route every toolchain call (cargo, wasm-pack, biome, typos, taplo,
+# bun, bacon, samply, inferno, …) through the dev container so a
+# fresh host needs only docker + git + just + lefthook (the last
+# only for git hook installation; the hooks themselves re-enter
+# the container too).
 #
-# Requires `docker compose up -d dev` first — the same prerequisite
-# already gates the biome/typos pre-commit hooks.
-web_exec := "docker compose exec -T dev"
+# The dev image bundles everything in one Dockerfile target; the
+# workspace is bind-mounted at /workspace and the named volumes
+# (cargo-registry, target-cache, node-cache) survive container
+# restarts so a second `just test` finds the previous build's
+# cache primed.
+#
+# Prerequisite: `docker compose up -d dev` once. The bun pre-commit
+# hooks already depend on the same container, so an existing
+# contributor with hooks installed has it running already.
+dexec := "docker compose exec -T dev"
 
 # Default: list recipes.
 _default:
@@ -35,28 +40,28 @@ ci: fmt-check lint docs-check test wasm-build web-build
 # lefthook install to this repo only. The contributor's global
 # hooks keep firing for every OTHER repo unchanged; THIS repo
 # gets the strict `lefthook.yml` pre-commit / pre-push pipeline.
+#
+# `lefthook install` runs on the host because the host's git is
+# what fires the hooks — the lefthook binary itself can come from
+# the host (mise) or the dev container; either way the install
+# step writes `.git/hooks/*` on the bind-mounted workspace.
 hooks:
     git config core.hooksPath .git/hooks
-    # `--force`: lefthook refuses install when both local + global
-    # `core.hooksPath` are set (it can't tell which the contributor
-    # wants). We've just set the local one one line above, so the
-    # force is safe and unambiguous: install into `.git/hooks/`,
-    # ignore the global setting.
-    lefthook install --force
+    {{dexec}} lefthook install --force
 
 # ── Formatting ───────────────────────────────────────────────────────────────
 
 # Format Rust, TS/JS, TOML in place.
 fmt:
-    cargo fmt --all
-    biome format --write .
-    taplo fmt
+    {{dexec}} cargo fmt --all
+    {{dexec}} biome format --write .
+    {{dexec}} taplo fmt
 
 # Verify formatting without writing changes.
 fmt-check:
-    cargo fmt --all -- --check
-    biome format .
-    taplo fmt --check
+    {{dexec}} cargo fmt --all -- --check
+    {{dexec}} biome format .
+    {{dexec}} taplo fmt --check
 
 # ── Linting ──────────────────────────────────────────────────────────────────
 
@@ -64,7 +69,7 @@ fmt-check:
 lint: lint-rust lint-deps lint-ts lint-typos
 
 lint-rust:
-    cargo clippy --workspace --all-targets -- -D warnings
+    {{dexec}} cargo clippy --workspace --all-targets -- -D warnings
 
 # Enforce the Pure-Rust dep contract + license / advisory / source gates.
 # The four subchecks mirror what the `security.yml` workflow runs as
@@ -75,21 +80,21 @@ lint-rust:
 # `deny.toml [licenses]`; `advisories` flags known RUSTSEC findings;
 # `sources` restricts deps to crates.io + an explicit allow-list.
 lint-deps:
-    cargo deny --workspace check bans licenses advisories sources
+    {{dexec}} cargo deny --workspace check bans licenses advisories sources
 
 lint-ts:
-    biome lint .
+    {{dexec}} biome lint .
 
 lint-typos:
-    typos
+    {{dexec}} typos
 
 # ── Tests ────────────────────────────────────────────────────────────────────
 
 test:
-    cargo nextest run --workspace --all-targets
+    {{dexec}} cargo nextest run --workspace --all-targets
     # Doc tests aren't covered by nextest; run them separately so a doc
     # comment that compiles but doesn't run keeps tripping the gate.
-    cargo test --workspace --doc --no-fail-fast
+    {{dexec}} cargo test --workspace --doc --no-fail-fast
 
 # ── WASM ─────────────────────────────────────────────────────────────────────
 
@@ -113,12 +118,13 @@ test:
 # rustflags, and `wasm-bindgen-rayon`'s cfg-guard sees what it
 # expects.
 wasm-build:
-    cd crates/photo-frame-wasm && env -u RUSTFLAGS RUSTUP_TOOLCHAIN=nightly-2026-04-01 CARGO_UNSTABLE_BUILD_STD=panic_abort,std wasm-pack build --target web --release --out-dir www/pkg
+    {{dexec}} bash -c 'cd crates/photo-frame-wasm && env -u RUSTFLAGS RUSTUP_TOOLCHAIN=nightly-2026-04-01 CARGO_UNSTABLE_BUILD_STD=panic_abort,std wasm-pack build --target web --release --out-dir www/pkg'
 
 # Mirror the Geist font files from the frame crate into the web bundle's
 # public/ directory so Vite serves them at /fonts/Geist/. Canonical source
 # of truth stays in `photo-frame-frame/assets/fonts/Geist/`; this is just
 # a build-output copy (ignored by git, regenerated on every build).
+# Plain shell mkdir/cp — no toolchain involved, runs on host.
 copy-web-fonts:
     mkdir -p crates/photo-frame-wasm/www/public/fonts/Geist
     cp -p crates/photo-frame-frame/assets/fonts/Geist/. crates/photo-frame-wasm/www/public/fonts/Geist/ -r
@@ -144,59 +150,66 @@ copy-coi-sw:
 # manual recipe exists mainly for when you've just edited
 # panda/*.ts and want fresh types in your editor before saving.
 panda-codegen:
-    {{web_exec}} bash -c 'cd crates/photo-frame-wasm/www && bun run panda codegen'
+    {{dexec}} bash -c 'cd crates/photo-frame-wasm/www && bun run panda codegen'
 
 web-build: wasm-build copy-web-fonts
-    {{web_exec}} bash -c 'cd crates/photo-frame-wasm/www && bun install --frozen-lockfile'
+    {{dexec}} bash -c 'cd crates/photo-frame-wasm/www && bun install --frozen-lockfile'
     just copy-coi-sw
-    {{web_exec}} bash -c 'cd crates/photo-frame-wasm/www && bun run build'
+    {{dexec}} bash -c 'cd crates/photo-frame-wasm/www && bun run build'
 
 # Run the vitest suite (pure-function + component tests) inside the
 # dev container. The container's named-volume `node_modules` is
 # populated by the first `bun install` and survives container
 # restarts, so subsequent runs skip the install step's cost.
 web-test:
-    {{web_exec}} bash -c 'cd crates/photo-frame-wasm/www && bun install --frozen-lockfile'
-    {{web_exec}} bash -c 'cd crates/photo-frame-wasm/www && bun run test'
+    {{dexec}} bash -c 'cd crates/photo-frame-wasm/www && bun install --frozen-lockfile'
+    {{dexec}} bash -c 'cd crates/photo-frame-wasm/www && bun run test'
 
 # Vite dev server. `--host 0.0.0.0` binds inside the container to
 # every interface; the compose port mapping (5173:5173) forwards to
 # the host so `http://localhost:5173` works as if bun ran natively.
 wasm-dev: wasm-build copy-web-fonts
-    {{web_exec}} bash -c 'cd crates/photo-frame-wasm/www && bun install'
+    {{dexec}} bash -c 'cd crates/photo-frame-wasm/www && bun install'
     just copy-coi-sw
-    {{web_exec}} bash -c 'cd crates/photo-frame-wasm/www && bun run dev -- --host 0.0.0.0'
+    {{dexec}} bash -c 'cd crates/photo-frame-wasm/www && bun run dev -- --host 0.0.0.0'
 
 wasm-preview: wasm-build copy-web-fonts
-    {{web_exec}} bash -c 'cd crates/photo-frame-wasm/www && bun install'
+    {{dexec}} bash -c 'cd crates/photo-frame-wasm/www && bun install'
     just copy-coi-sw
-    {{web_exec}} bash -c 'cd crates/photo-frame-wasm/www && bun run build && bun run preview -- --host 0.0.0.0'
+    {{dexec}} bash -c 'cd crates/photo-frame-wasm/www && bun run build && bun run preview -- --host 0.0.0.0'
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
-# Run the CLI with arguments, e.g. `just run samples/scratch/sample.jpg -o /tmp/out.jpg`
+# Run the CLI with arguments, e.g. `just run samples/scratch/sample.jpg -o /tmp/out.jpg`.
+# Paths in args refer to /workspace inside the container — host paths
+# work verbatim under the bind-mount.
 run *args:
-    cargo run -p photo-frame-cli -- "$@"
+    {{dexec}} cargo run -p photo-frame-cli -- "$@"
 
 build-release:
-    cargo build -p photo-frame-cli --release
+    {{dexec}} cargo build -p photo-frame-cli --release
 
 # ── Dev inner loop ──────────────────────────────────────────────────────
 
 # Start bacon in clippy-all mode (warnings denied, full workspace).
 # Switch jobs with single-letter keys inside bacon: t = test, c =
 # clippy-all, d = doc-tests, r = run.
+#
+# Bacon is a TUI — we drop `-T` so docker-compose allocates a pseudo-
+# TTY and the interactive key bindings work.
 dev:
-    bacon
+    docker compose exec dev bacon
 
 # Watch + run tests on every save. Equivalent to bacon's `test` job.
 watch:
-    bacon test
+    docker compose exec dev bacon test
 
 # ── Quality / measurement ───────────────────────────────────────────────
 
-# Run hyperfine measurement of the host + container bench matrix and
-# print summary. See BENCHMARKS.md for the curated history.
+# Hyperfine measurement of the build matrix. The script itself
+# alternates between host-binary timings (cargo, docker build) and
+# inside-container timings, so it runs straight from the host — no
+# blanket docker-exec wrapper.
 bench-measure variant="all":
     scripts/bench-build.sh {{ variant }}
 
@@ -206,14 +219,14 @@ bench-measure variant="all":
 # to divan directly: `just bench decode --sample-count 30` runs only the
 # decode group with 30 samples per fixture.
 bench *args:
-    cargo bench -p photo-frame-bench --bench pipeline -- "$@"
+    {{dexec}} cargo bench -p photo-frame-bench --bench pipeline -- "$@"
 
 # Run iai-callgrind instruction-count benches. Requires `valgrind` at
 # the OS level (`apt install valgrind`) plus the `iai-callgrind-runner`
 # binary from mise.toml. Output goes to target/iai/ and is the basis
 # for the runtime-bench CI regression gate.
 bench-icount *args:
-    cargo bench -p photo-frame-bench --bench icount -- "$@"
+    {{dexec}} cargo bench -p photo-frame-bench --bench icount -- "$@"
 
 # Record a samply CPU profile of a single CLI invocation. Drop the
 # resulting JSON onto https://profiler.firefox.com/ to inspect (or
@@ -221,10 +234,9 @@ bench-icount *args:
 # Requires `samply` (mise installs from cargo:samply) and Linux
 # `kernel.perf_event_paranoid <= 2` (the typical default).
 profile-pipeline fixture:
-    cargo build -p photo-frame-cli --release
+    {{dexec}} cargo build -p photo-frame-cli --release
     mkdir -p target/profiling
-    samply record -o target/profiling/trace.json -- \
-        target/release/photo-frame-cli {{ fixture }} -o target/profiling/out.jpg
+    {{dexec}} bash -c 'samply record -o target/profiling/trace.json -- target/release/photo-frame-cli {{ fixture }} -o target/profiling/out.jpg'
     @echo ""
     @echo "▶ trace saved to target/profiling/trace.json"
     @echo "▶ open: samply load target/profiling/trace.json"
@@ -236,12 +248,10 @@ profile-pipeline fixture:
 # `.folded` file via tracing-flame, then turns that into an SVG via
 # `inferno-flamegraph` (mise installs from cargo:inferno).
 profile-trace fixture:
-    cargo build -p photo-frame-cli --release --features trace
+    {{dexec}} cargo build -p photo-frame-cli --release --features trace
     mkdir -p target/profiling
-    ./target/release/photo-frame \
-        --profile-trace=target/profiling/trace.folded \
-        {{ fixture }} -o target/profiling/out.jpg
-    inferno-flamegraph < target/profiling/trace.folded > target/profiling/flamegraph.svg
+    {{dexec}} bash -c './target/release/photo-frame --profile-trace=target/profiling/trace.folded {{ fixture }} -o target/profiling/out.jpg'
+    {{dexec}} bash -c 'inferno-flamegraph < target/profiling/trace.folded > target/profiling/flamegraph.svg'
     @echo ""
     @echo "▶ folded:    target/profiling/trace.folded"
     @echo "▶ svg:       target/profiling/flamegraph.svg (open in any browser)"
@@ -250,17 +260,22 @@ profile-trace fixture:
 # exit code assertions). WASM playwright suite lives separately under
 # crates/photo-frame-wasm/www/tests/e2e/ (not yet wired in).
 e2e:
-    cargo nextest run -p photo-frame-cli --test e2e
+    {{dexec}} cargo nextest run -p photo-frame-cli --test e2e
 
 # Line / branch coverage via cargo-llvm-cov. Output: lcov.info.
 cov:
-    cargo llvm-cov --workspace --lcov --output-path lcov.info
+    {{dexec}} cargo llvm-cov --workspace --lcov --output-path lcov.info
 
 # Doc generation for the whole workspace (libs only — `--lib` skips
 # the CLI bin so it doesn't collide with the facade `photo-frame` lib
 # name in `target/doc/`). `--no-deps` keeps the build local.
+#
+# `--open` is dropped from the container variant — the dev image has
+# no browser. Open `target/doc/photo_frame/index.html` from the host
+# after the build finishes.
 docs:
-    cargo doc --workspace --lib --no-deps --open
+    {{dexec}} cargo doc --workspace --lib --no-deps
+    @echo "▶ open: target/doc/photo_frame/index.html"
 
 # Strict doc build: hard-fails on every rustdoc warning (broken intra-
 # doc links, invalid HTML, missing docs on public items — the last
@@ -271,24 +286,26 @@ docs:
 # targets to dodge the workspace doc-name collision between the
 # `photo-frame` CLI binary and the `photo-frame` facade lib.
 docs-check:
-    RUSTDOCFLAGS='-D warnings' cargo doc --workspace --lib --no-deps --document-private-items
+    {{dexec}} bash -c "RUSTDOCFLAGS='-D warnings' cargo doc --workspace --lib --no-deps --document-private-items"
 
 # Show outdated workspace deps (root-only so we don't drown in
 # transitive churn).
 outdated:
-    cargo outdated --workspace --root-deps-only
+    {{dexec}} cargo outdated --workspace --root-deps-only
 
 # Verify the rust-version pin in workspace Cargo.toml is satisfiable
 # by the actual code (catches accidental edition-2024 / new-stdlib
 # regressions on the MSRV path).
 msrv:
-    cargo msrv verify
+    {{dexec}} cargo msrv verify
 
 # ── Docker images ────────────────────────────────────────────────────────
 
 # Build the slim runtime image for distribution. Drives the multi-stage
 # Dockerfile's chef-base → planner → cacher → builder → runtime chain
 # via cargo-chef so an app-source change re-uses the cooked dep layer.
+# Runs on the host because `docker build` itself is the action and we
+# don't want a docker-in-docker chain just to invoke it.
 docker-build-release:
     DOCKER_BUILDKIT=1 docker build --target runtime -t photo-frame:latest .
     docker image inspect photo-frame:latest --format 'image: {{ "{{" }}.RepoTags{{ "}}" }} size: {{ "{{" }}.Size{{ "}}" }} bytes'

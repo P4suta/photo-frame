@@ -1,5 +1,11 @@
-# Lefthook hooks delegate to `just` recipes so there is exactly one source of truth
-# for what "fmt / lint / test" means across local, hook, and CI surfaces.
+# Lefthook hooks delegate to `just` recipes so there is exactly one
+# source of truth for what "fmt / lint / test" means across local,
+# hook, and CI surfaces.
+#
+# Every tool call (biome, cargo fmt, taplo, typos, …) routes through
+# `docker compose exec -T dev` so the host doesn't need any of the
+# toolchain installed — only docker + git + just + lefthook. Requires
+# `docker compose up -d dev` once.
 
 pre-commit:
   parallel: true
@@ -17,19 +23,13 @@ pre-commit:
 
     fmt-rust:
       glob: '*.rs'
-      run: cargo fmt --all -- --check
-    # biome (formatter + linter) lives only inside the dev container —
-    # the host has no global biome and the web package.json doesn't
-    # depend on @biomejs/biome either. Route the hook through
-    # `docker compose exec` so a host-side `git commit` still hits
-    # the same biome the container/CI uses. Requires the dev service
-    # to be running: `docker compose up -d dev`.
+      run: docker compose exec -T dev cargo fmt --all -- --check
     fmt-ts:
       glob: '*.{ts,tsx,js,jsx,json,jsonc,css}'
       run: docker compose exec -T dev biome format {staged_files}
     fmt-toml:
       glob: '*.toml'
-      run: taplo fmt --check {staged_files}
+      run: docker compose exec -T dev taplo fmt --check {staged_files}
     typos:
       # `--no-progress` was removed in typos-cli ~1.40; `--quiet` is
       # the current way to suppress the progress bar that breaks
@@ -40,7 +40,7 @@ pre-commit:
       # ambiguous words, so the autofix is safe to run unattended.
       # `stage_fixed: true` then re-stages the corrected files so
       # the commit includes the fixes instead of failing on them.
-      run: typos --quiet --write-changes {staged_files}
+      run: docker compose exec -T dev typos --quiet --write-changes {staged_files}
       stage_fixed: true
     lint-ts:
       glob: '*.{ts,tsx,js,jsx,css}'
