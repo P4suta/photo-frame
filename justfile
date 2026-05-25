@@ -1,6 +1,18 @@
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 set positional-arguments
 
+# Route bun-driven commands through the dev container so the host
+# doesn't need bun installed locally. The container ships bun + biome
+# (see Dockerfile) and mounts the workspace as a bind mount, so the
+# `crates/photo-frame-wasm/www/` source files are shared with the
+# host editor verbatim. `node_modules/` lives in a named volume
+# (`node-cache`, see docker-compose.yml) so installs survive
+# container restarts and don't litter the host filesystem.
+#
+# Requires `docker compose up -d dev` first — the same prerequisite
+# already gates the biome/typos pre-commit hooks.
+web_exec := "docker compose exec -T dev"
+
 # Default: list recipes.
 _default:
     @just --list --unsorted
@@ -8,7 +20,7 @@ _default:
 # ── Composite ────────────────────────────────────────────────────────────────
 
 # Run the full CI suite locally (mirrors .github/workflows/ci.yml).
-ci: fmt-check lint test wasm-build web-build
+ci: fmt-check lint docs-check test wasm-build web-build
 
 # Install lefthook git hooks (run once after clone).
 #
@@ -132,30 +144,33 @@ copy-coi-sw:
 # manual recipe exists mainly for when you've just edited
 # panda/*.ts and want fresh types in your editor before saving.
 panda-codegen:
-    cd crates/photo-frame-wasm/www && bun run panda codegen
+    {{web_exec}} bash -c 'cd crates/photo-frame-wasm/www && bun run panda codegen'
 
 web-build: wasm-build copy-web-fonts
-    cd crates/photo-frame-wasm/www && bun install --frozen-lockfile
+    {{web_exec}} bash -c 'cd crates/photo-frame-wasm/www && bun install --frozen-lockfile'
     just copy-coi-sw
-    cd crates/photo-frame-wasm/www && bun run build
+    {{web_exec}} bash -c 'cd crates/photo-frame-wasm/www && bun run build'
 
-# Run the vitest suite (pure-function + component tests).
-# Routed through the host's bun (matches `web-build` /
-# `wasm-dev`) so it doesn't depend on the container's
-# named-volume node_modules being populated.
+# Run the vitest suite (pure-function + component tests) inside the
+# dev container. The container's named-volume `node_modules` is
+# populated by the first `bun install` and survives container
+# restarts, so subsequent runs skip the install step's cost.
 web-test:
-    cd crates/photo-frame-wasm/www && bun install --frozen-lockfile
-    cd crates/photo-frame-wasm/www && bun run test
+    {{web_exec}} bash -c 'cd crates/photo-frame-wasm/www && bun install --frozen-lockfile'
+    {{web_exec}} bash -c 'cd crates/photo-frame-wasm/www && bun run test'
 
+# Vite dev server. `--host 0.0.0.0` binds inside the container to
+# every interface; the compose port mapping (5173:5173) forwards to
+# the host so `http://localhost:5173` works as if bun ran natively.
 wasm-dev: wasm-build copy-web-fonts
-    cd crates/photo-frame-wasm/www && bun install
+    {{web_exec}} bash -c 'cd crates/photo-frame-wasm/www && bun install'
     just copy-coi-sw
-    cd crates/photo-frame-wasm/www && bun run dev -- --host 0.0.0.0
+    {{web_exec}} bash -c 'cd crates/photo-frame-wasm/www && bun run dev -- --host 0.0.0.0'
 
 wasm-preview: wasm-build copy-web-fonts
-    cd crates/photo-frame-wasm/www && bun install
+    {{web_exec}} bash -c 'cd crates/photo-frame-wasm/www && bun install'
     just copy-coi-sw
-    cd crates/photo-frame-wasm/www && bun run build && bun run preview -- --host 0.0.0.0
+    {{web_exec}} bash -c 'cd crates/photo-frame-wasm/www && bun run build && bun run preview -- --host 0.0.0.0'
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
@@ -241,9 +256,22 @@ e2e:
 cov:
     cargo llvm-cov --workspace --lcov --output-path lcov.info
 
-# Doc generation for the whole workspace (no deps, public surface only).
+# Doc generation for the whole workspace (libs only — `--lib` skips
+# the CLI bin so it doesn't collide with the facade `photo-frame` lib
+# name in `target/doc/`). `--no-deps` keeps the build local.
 docs:
-    cargo doc --workspace --no-deps --open
+    cargo doc --workspace --lib --no-deps --open
+
+# Strict doc build: hard-fails on every rustdoc warning (broken intra-
+# doc links, invalid HTML, missing docs on public items — the last
+# coming from the workspace's `missing_docs = "warn"` lint). Wired
+# into `just ci` so the doc surface gates pull-requests the same way
+# clippy does. `--document-private-items` includes `pub(crate)`
+# surfaces (the geometry spiral types end-to-end); `--lib` skips bin
+# targets to dodge the workspace doc-name collision between the
+# `photo-frame` CLI binary and the `photo-frame` facade lib.
+docs-check:
+    RUSTDOCFLAGS='-D warnings' cargo doc --workspace --lib --no-deps --document-private-items
 
 # Show outdated workspace deps (root-only so we don't drown in
 # transitive churn).

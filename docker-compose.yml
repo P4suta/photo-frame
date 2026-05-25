@@ -36,6 +36,16 @@ services:
       - target-cache:/workspace/target
       - node-cache:/workspace/crates/photo-frame-wasm/www/node_modules
     working_dir: /workspace
+    # Docker copies the host's `/etc/resolv.conf` into the container.
+    # On hosts running systemd-resolved (the default on Ubuntu /
+    # Debian desktops, etc.) that file points to `127.0.0.53`, which
+    # is only reachable from the host's loopback — the container's
+    # network namespace can't see it, so DNS resolution fails for
+    # `bun install`, `cargo fetch`, and the like. Pinning explicit
+    # public resolvers here sidesteps the systemd-resolved trap.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     ports:
       - '5173:5173' # Vite dev server
     tty: true
