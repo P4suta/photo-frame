@@ -1,222 +1,60 @@
-import { downloadZip } from 'client-zip';
-import { createEffect, createMemo, createSignal, on, onCleanup, onMount, Show } from 'solid-js';
+import { createMemo, createSignal, onCleanup, Show } from 'solid-js';
 import { appShell, button } from '../styled-system/recipes';
-import {
-  advancedBody,
-  advancedGroup,
-  advancedSummary,
-  appHeader,
-  brand,
-  controls,
-  headerStatus,
-  previewCanvas,
-  previewFrame,
-  sidebar,
-  sidebarFooter,
-  stage,
-  stageBatch,
-  stageCanvas,
-  stageEmpty,
-  tagline,
-  wordmark,
-} from './App.styles';
-import { Field, Segmented } from './components/Segmented';
+import { sidebar, sidebarFooter, stage, stageBatch, stageCanvas, stageEmpty } from './App.styles';
+import { AppHeader } from './components/AppHeader';
+import { CanvasPreview } from './components/CanvasPreview';
+import { SidebarControls } from './components/SidebarControls';
 import { type DroppedFile, DropZone } from './DropZone';
-import {
-  type BatchItem,
-  type BatchResult,
-  type CaptionLayout,
-  disposeWorker,
-  encodeJpeg,
-  type FrameOptionsForPrepare,
-  type FrameTheme,
-  generateThumbnailBlob,
-  getWorker,
-  type PipelineOptions,
-  type PreparedPixels,
-  preparePixels,
-  type WorkerReply,
-  type WorkerRequest,
-} from './frame-client';
+import { disposeWorker, getWorker } from './frame-client';
 import { Gallery } from './Gallery';
-import { createGenerationGate } from './lib/batch-sequencer';
-import {
-  CAPTION_MODES,
-  type CaptionMode,
-  fromCaptionMode,
-  toCaptionMode,
-} from './lib/caption-mode';
-import { containFit } from './lib/contain-fit';
-import { framedName, stringifyError, uint8ToBuffer } from './lib/format';
-import {
-  LONG_EDGE_OPTIONS,
-  type LongEdgeKey,
-  longEdgeKeyFor,
-  PRESETS,
-  type PresetKey,
-  pickAutoDemoteKey,
-  sourceLongEdgeOf,
-} from './lib/long-edge';
-import { createVariantCache, type VariantCache } from './lib/variant-cache';
-import { ALL_VARIANTS, type VariantKey, variantKey } from './lib/variants';
-
-// The preview pipeline no longer caps the long edge below the
-// user's chosen `longEdge` setting — earlier passes used a
-// fixed 1600 / 3200 px ceiling here, but the new aspect-
-// tracking wrapper grows to the stage's short side and the
-// canvas drawing buffer can easily clear any static cap. Since
-// the source's long edge is now also known on drop (see the
-// `DroppedFile.longEdge` field), the preview can render at the
-// chosen resolution directly: WASM's own cache amortises the
-// extra cost across re-prepares for the same source.
-
-// `value` mirrors the Rust enum (`paper`/`ink`), `label` is the
-// UI face — direct colour names read more honestly than the
-// material metaphors did.
-const THEMES = [
-  { value: 'paper' as const, label: 'White', description: 'White frame, dark text' },
-  { value: 'ink' as const, label: 'Black', description: 'Black frame, light text' },
-] satisfies ReadonlyArray<{ value: FrameTheme; label: string; description: string }>;
-
-// Caption mode union + bidirectional (layout, showMeta) mapping
-// live in `lib/caption-mode.ts` so the projection logic is
-// pinned by unit tests. Quality presets + long-edge size
-// options live in `lib/long-edge.ts` for the same reason.
-
-// Row state for the batch gallery. `thumbnailUrl` is the small
-// framed preview shown while the row sits queued / processing;
-// `resultUrl` is the full-resolution JPEG that lets the card
-// double as a download trigger once the row reaches `done`.
-type BatchRow = {
-  key: string;
-  name: string;
-  status: 'queued' | 'processing' | 'done' | 'error';
-  thumbnailUrl?: string;
-  resultUrl?: string;
-  message?: string;
-};
-
-// Thumbnail long-edge cap — sized for the masonry layout's
-// column width times a comfortable DPR. Cards span `phi.5`
-// (~178 px) per column at the widest viewport, and a 2× DPR
-// pass through that demands ~360 px. 480 keeps the thumb sharp
-// on retina-class displays without paying for full-resolution
-// frame composition.
-const THUMBNAIL_LONG_EDGE = 480;
-// Debounce window for thumbnail regeneration on theme/layout/
-// show_meta toggles. Mirrors `ESTIMATE_DEBOUNCE_MS` rationale —
-// the user often drags through preset states before settling.
-const THUMBNAIL_DEBOUNCE_MS = 320;
+import { sourceLongEdgeOf } from './lib/long-edge';
+import { createAppSettings } from './state/app-settings';
+import { createBatchSession } from './state/batch-session';
+import { createPreviewSession } from './state/preview-session';
 
 type Mode = 'empty' | 'single' | 'batch';
 
-// Variant cache key + the 8-element ALL_VARIANTS list live in
-// `lib/variants.ts`; pre-rendering the (theme × layout ×
-// showMeta) matrix in the background keeps toggles signal-swap
-// fast.
-
 export const App = () => {
+  // ── session source (inline — small, App-only) ─────────────────
+  // The three signals below define which mode the shell is in: a
+  // single image, a batch, or empty. Everything downstream (sessions,
+  // sidebar, header) derives from these.
   const [single, setSingle] = createSignal<DroppedFile | null>(null);
-  // Phase H — two-layer variant cache backing the preview. Entries
-  // are populated by the prepare-then-prefetch effect; on a scope
-  // change (image swap or Resolution / Preset bump) the cache
-  // `rotate()`s instead of wiping, so the canvas keeps showing the
-  // stale-but-correctly-shaped variant until the new prepare lands
-  // and `set()` writes the fresh one. Without rotation the user
-  // sees a 50–700 ms blank between scope changes — see
-  // `lib/variant-cache.ts` for the full rationale.
-  const [previewVariants, setPreviewVariants] = createSignal<
-    VariantCache<VariantKey, PreparedPixels>
-  >(createVariantCache<VariantKey, PreparedPixels>());
-  const [batchRows, setBatchRows] = createSignal<BatchRow[]>([]);
   const [batchFiles, setBatchFiles] = createSignal<DroppedFile[] | null>(null);
-  const [preset, setPreset] = createSignal<PresetKey>('standard');
-  const [quality, setQuality] = createSignal<number>(PRESETS.standard.quality);
-  const [longEdge, setLongEdge] = createSignal<LongEdgeKey>('full');
-  const [theme, setTheme] = createSignal<FrameTheme>('paper');
-  const [layout, setLayout] = createSignal<CaptionLayout>('edges');
-  const [showMeta, setShowMeta] = createSignal(true);
   const [status, setStatus] = createSignal('');
-  const [busy, setBusy] = createSignal(false);
 
   const mode = createMemo<Mode>(() =>
     batchFiles() !== null ? 'batch' : single() !== null ? 'single' : 'empty',
   );
 
-  const applyPreset = (key: PresetKey): void => {
-    setPreset(key);
-    const p = PRESETS[key];
-    setQuality(p.quality);
-    setLongEdge(longEdgeKeyFor(p.maxLongEdge));
-  };
-
-  const effectiveMaxLongEdge = createMemo<number | null>(
-    () => LONG_EDGE_OPTIONS[longEdge()].maxLongEdge,
-  );
-
-  // `sourceLongEdge` lives in `lib/long-edge.ts` so the
-  // single-vs-batch min-fold logic + the empty-batch guard
-  // are pinned by `sourceLongEdgeOf` unit tests.
+  // Source long-edge (min across the batch, or the single image's).
+  // Fed into settings for auto-demote and into SidebarControls for
+  // the Long-edge picker's oversize warnings.
   const sourceLongEdge = createMemo<number | null>(() => sourceLongEdgeOf(single(), batchFiles()));
 
-  // Auto-demote: if a Long-edge option larger than the source
-  // is currently selected, snap to the largest valid option.
-  // Without this, the user could "select 4K" and quietly get
-  // a Full-resolution output (WASM's max_long_edge is a
-  // ceiling, not a target), which reads as a bug.
-  createEffect(() => {
-    const next = pickAutoDemoteKey(sourceLongEdge(), longEdge());
-    if (next !== longEdge()) setLongEdge(next);
+  // ── settings + sessions ───────────────────────────────────────
+  const settings = createAppSettings({ sourceLongEdge });
+
+  const preview = createPreviewSession({
+    source: single,
+    settings: settings.state,
+    setStatus,
   });
 
-  const buildFrameOptions = (maxLongEdge: number | null): FrameOptionsForPrepare => ({
-    theme: theme(),
-    layout: layout(),
-    show_meta: showMeta(),
-    max_long_edge: maxLongEdge,
+  const batch = createBatchSession({
+    files: batchFiles,
+    settings: settings.state,
+    setStatus,
+    workerTarget: getWorker(),
   });
 
-  // Phase G2 — `currentVariantKey` tracks which (theme, layout,
-  // show_meta) tuple the user is looking at right now;
-  // `previewPixels` is the cached preview for that tuple, or `null`
-  // if the prepare/prefetch effect hasn't filled it yet.
-  const currentVariantKey = createMemo(() => variantKey(theme(), layout(), showMeta()));
-  const previewPixels = createMemo<PreparedPixels | null>(
-    () => previewVariants().get(currentVariantKey()) ?? null,
-  );
-
-  // The reactive write helpers below funnel every cache mutation
-  // through the signal so the `previewPixels` memo (and anything
-  // else that reads `previewVariants()`) re-evaluates atomically.
-  const cacheSet = (key: VariantKey, pixels: PreparedPixels): void => {
-    setPreviewVariants((c) => c.set(key, pixels));
-  };
-  const cacheRotate = (): void => {
-    setPreviewVariants((c) => c.rotate());
-  };
-  const cacheClear = (): void => {
-    setPreviewVariants((c) => c.clear());
-  };
-
-  const buildPipelineOptions = (maxLongEdge: number | null): PipelineOptions => ({
-    ...buildFrameOptions(maxLongEdge),
-    jpeg_quality: quality(),
-  });
-
-  // Reset every transient piece of state to the empty drop-zone
-  // view. Shared between `onDrop` (which then sets the new files)
-  // and `resetToEmpty` (called by the brand wordmark link).
+  // ── session transitions ───────────────────────────────────────
   const clearSession = (): void => {
-    revokeAllBatchUrls();
-    // Full session reset — wipe both cache layers. The previous
-    // layer would otherwise briefly resurface the prior image
-    // when the next scope effect rotated this (just-cleared)
-    // current onto it; `clear()` zeros both at once.
-    cacheClear();
+    preview.dispose();
+    batch.dispose();
     setStatus('');
     setSingle(null);
     setBatchFiles(null);
-    setBatchRows([]);
   };
 
   const onDrop = (files: DroppedFile[]): void => {
@@ -226,603 +64,25 @@ export const App = () => {
       setSingle(first);
     } else {
       setBatchFiles(files);
-      setBatchRows(
-        files.map((f) => ({
-          key: f.name,
-          name: f.name,
-          status: 'queued',
-        })),
-      );
     }
   };
 
-  // Wordmark / brand-home click target.
-  const resetToEmpty = (): void => {
-    clearSession();
-  };
-
-  const revokeAllBatchUrls = (): void => {
-    for (const row of batchRows()) {
-      if (row.thumbnailUrl) URL.revokeObjectURL(row.thumbnailUrl);
-      if (row.resultUrl) URL.revokeObjectURL(row.resultUrl);
-    }
-  };
-
-  // ── prepare + prefetch effect ────────────────────────────────────
-  //
-  // Phase G2 — every (image, max_long_edge) scope owns its own
-  // `previewVariants` map. When the scope changes we wipe the map and:
-  //
-  //   1. Prepare the *currently displayed* variant first (highest UX
-  //      priority — this is the only one the user actively waits for).
-  //   2. Sequentially prefetch the remaining 7 (theme × layout ×
-  //      show_meta) variants in the background. WASM's Phase G1
-  //      `cached_or_decode` reuses the decoded `Photograph` across
-  //      these calls so each prefetch only pays the frame stage
-  //      (~50–200 ms at preview res), not a full decode.
-  //
-  // `prepareGate` invalidates in-flight prefetches when the
-  // user drops a new image or moves the max-long-edge slider — only
-  // the *currently relevant* scope ever writes back into the map.
-  // The Worker serialises requests via `exchange()`'s request-ID
-  // filter, and stale completions are dropped by the gate's
-  // `isCurrent` check before they touch the signal.
-  const prepareGate = createGenerationGate();
-  createEffect(
-    on(
-      () => {
-        const current = single();
-        if (!current) return null;
-        return {
-          current,
-          maxLongEdge: effectiveMaxLongEdge(),
-        };
-      },
-      (scope) => {
-        if (!scope) return;
-        const gen = prepareGate.bump();
-        // Phase H — rotate (not wipe): the just-current variants
-        // sink to the `previous` layer so `previewPixels()` keeps
-        // returning them while the new scope's prepare flight is
-        // in the air. The user sees no blank window — the stale
-        // (correct shape, wrong pixel cap) preview holds the
-        // canvas until the fresh prepare lands.
-        cacheRotate();
-        const maxLongEdge = scope.maxLongEdge;
-        // Snapshot the user-visible variant at scope-change time —
-        // we prepare this one first so the canvas updates ASAP.
-        const initial = {
-          theme: theme(),
-          layout: layout(),
-          showMeta: showMeta(),
-        };
-        void runPrepareAndPrefetch(scope.current, initial, maxLongEdge, gen);
-      },
-    ),
-  );
-
-  // Phase G2 — if the user toggles theme/layout/show_meta to a
-  // variant the prefetch loop hasn't reached yet, kick off an
-  // out-of-order prepare for it immediately. The prefetch loop
-  // skips variants already in the map (see `runPrepareAndPrefetch`)
-  // so we don't redo work. Wrapped in `defer: true` so this effect
-  // doesn't fire on the initial signal hookup — the scope effect
-  // above already covers that path.
-  createEffect(
-    on(
-      currentVariantKey,
-      (key) => {
-        const current = single();
-        if (!current) return;
-        // `hasFresh` — only the *current* layer counts as cached.
-        // A previous-layer entry is stale (wrong scope) and must
-        // be re-prepared even though `has(key)` would return true.
-        if (previewVariants().hasFresh(key)) return;
-        const maxLongEdge = effectiveMaxLongEdge();
-        const opts: FrameOptionsForPrepare = {
-          theme: theme(),
-          layout: layout(),
-          show_meta: showMeta(),
-          max_long_edge: maxLongEdge,
-        };
-        void runPreparePromise(current, opts, key, prepareGate.current());
-      },
-      { defer: true },
-    ),
-  );
-
-  const runPreparePromise = async (
-    current: DroppedFile,
-    opts: FrameOptionsForPrepare,
-    key: VariantKey,
-    gen: number,
-  ): Promise<void> => {
-    setStatus('Framing preview…');
-    try {
-      const pixels = await preparePixels(current.data, opts);
-      if (!prepareGate.isCurrent(gen) || single() !== current) return;
-      cacheSet(key, pixels);
-      setStatus('');
-    } catch (error) {
-      if (prepareGate.isCurrent(gen)) setStatus(`Error: ${stringifyError(error)}`);
-    }
-  };
-
-  const runPrepareAndPrefetch = async (
-    current: DroppedFile,
-    initial: { theme: FrameTheme; layout: CaptionLayout; showMeta: boolean },
-    maxLongEdge: number | null,
-    gen: number,
-  ): Promise<void> => {
-    const initialKey = variantKey(initial.theme, initial.layout, initial.showMeta);
-    const initialOpts: FrameOptionsForPrepare = {
-      theme: initial.theme,
-      layout: initial.layout,
-      show_meta: initial.showMeta,
-      max_long_edge: maxLongEdge,
-    };
-    await runPreparePromise(current, initialOpts, initialKey, gen);
-    if (!prepareGate.isCurrent(gen)) return;
-    // Sequential background prefetch — Worker serialises anyway, and
-    // sequencing means a user-initiated `runPreparePromise` from the
-    // toggle effect above only has at most one prefetch request in
-    // flight ahead of it to wait on (~50–200 ms at preview res).
-    for (const v of ALL_VARIANTS) {
-      if (!prepareGate.isCurrent(gen)) return;
-      const key = variantKey(v.theme, v.layout, v.showMeta);
-      // `hasFresh` — only the *current* layer counts as cached
-      // for the prefetch loop. Stale `previous` entries must be
-      // re-prepared under the new scope.
-      if (previewVariants().hasFresh(key)) continue;
-      const opts: FrameOptionsForPrepare = {
-        theme: v.theme,
-        layout: v.layout,
-        show_meta: v.showMeta,
-        max_long_edge: maxLongEdge,
-      };
-      try {
-        const pixels = await preparePixels(current.data, opts);
-        if (!prepareGate.isCurrent(gen)) return;
-        cacheSet(key, pixels);
-      } catch {
-        // Prefetch best-effort — silently skip failed variants so a
-        // glitch on one combo doesn't poison the UI status line.
-      }
-    }
-  };
-
-  // ── stage size + contain-fit frame ─────────────────────────────
-  //
-  // The preview wrapper's pixel size is computed here from the
-  // measured stage rect and the source aspect, then handed to
-  // the wrapper as inline `width` / `height`. This is the only
-  // reliably-rendering contain-fit when the child of the
-  // wrapper is a `<canvas>` (whose own intrinsic size confuses
-  // CSS grid-item min-content).
-  //
-  // The stage-canvas div lives inside a `<Show>` that flips
-  // with `mode`, so its DOM node mounts/unmounts as the user
-  // moves between empty / single / batch. The ref signal lets
-  // a `createEffect` rebuild the ResizeObserver every time the
-  // node is recreated — a one-shot `onMount` would have only
-  // ever caught the initial empty-mode null.
-  const [stageCanvasEl, setStageCanvasEl] = createSignal<HTMLDivElement | undefined>();
-  const [stageSize, setStageSize] = createSignal<{ w: number; h: number }>({ w: 0, h: 0 });
-
-  createEffect(() => {
-    const el = stageCanvasEl();
-    if (!el) {
-      setStageSize({ w: 0, h: 0 });
-      return;
-    }
-    // Seed with a synchronous measurement so the first paint
-    // doesn't have to wait for the observer to tick.
-    setStageSize({ w: el.clientWidth, h: el.clientHeight });
-    const ro = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (!entry) return;
-      setStageSize({ w: entry.contentRect.width, h: entry.contentRect.height });
-    });
-    ro.observe(el);
-    onCleanup(() => ro.disconnect());
-  });
-
-  // `frameSize` returns inline `width` / `height` strings (or
-  // `null` until we have both a preview and a measured stage).
-  // The contain-fit math itself lives in `lib/contain-fit.ts`
-  // so the lopsided-aspect + `Math.floor` edge cases are pinned
-  // by fast-check + named scenarios there.
-  const frameSize = createMemo<{ width: string; height: string } | null>(() => {
-    const px = previewPixels();
-    const stage = stageSize();
-    if (!px) return null;
-    const fit = containFit({ srcW: px.width, srcH: px.height, stageW: stage.w, stageH: stage.h });
-    if (!fit) return null;
-    return { width: `${fit.width}px`, height: `${fit.height}px` };
-  });
-
-  // ── draw effect ──────────────────────────────────────────────────
-  let canvasRef: HTMLCanvasElement | undefined;
-
-  const paintPreview = (canvas: HTMLCanvasElement): void => {
-    const pixels = previewPixels();
-    if (!pixels) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const cssW = canvas.clientWidth;
-    const cssH = canvas.clientHeight;
-    if (cssW === 0 || cssH === 0) return;
-    const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
-    canvas.width = Math.round(cssW * dpr);
-    canvas.height = Math.round(cssH * dpr);
-    // Author in CSS pixels — the DPR ride is on the transform so
-    // the contain-fit maths below works in container units.
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    // Browsers default `imageSmoothingQuality` to `low` (= cheap
-    // bilinear); `high` engages the proper Lanczos-class
-    // resampler so a 3200 px source scales down to a 1500 px
-    // canvas without the stippled-edge "jaggy" look.
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    ctx.clearRect(0, 0, cssW, cssH);
-
-    // Phase F3-lite — zero-copy view onto the cached RGBA bytes
-    // (the WASM-returned `Uint8Array::new_with_length` buffer is
-    // a regular ArrayBuffer, never SharedArrayBuffer, so the
-    // ImageData spec accepts it without a memcpy).
-    const view = new Uint8ClampedArray(
-      pixels.rgba.buffer as ArrayBuffer,
-      pixels.rgba.byteOffset,
-      pixels.rgba.byteLength,
-    );
-    // Stage the RGBA into an offscreen canvas so `drawImage` can
-    // letterbox it. `putImageData` doesn't honour destination
-    // rectangles, so going through an offscreen is the minimal
-    // way to compose put + scale in one pipeline.
-    const off = document.createElement('canvas');
-    off.width = pixels.width;
-    off.height = pixels.height;
-    const offCtx = off.getContext('2d');
-    if (!offCtx) return;
-    offCtx.putImageData(new ImageData(view, pixels.width, pixels.height), 0, 0);
-
-    const scale = Math.min(cssW / pixels.width, cssH / pixels.height);
-    const dw = pixels.width * scale;
-    const dh = pixels.height * scale;
-    const dx = (cssW - dw) / 2;
-    const dy = (cssH - dh) / 2;
-    ctx.drawImage(off, dx, dy, dw, dh);
-  };
-
-  // View Transitions API wrapper — Chrome 111+/Safari 18+/
-  // Firefox 132+ (~Nov 2024) implement `startViewTransition`.
-  // The browser screenshots the marked element (= the preview
-  // canvas, via `view-transition-name: preview-canvas` in
-  // App.styles.ts), runs the synchronous DOM mutation in `cb`,
-  // then GPU-crossfades the screenshot into the post-mutation
-  // state. The fallback for older engines is the hard cut we
-  // had before — which combined with the stale-while-revalidate
-  // cache below still reads as smooth, just without the fade.
-  //
-  // Each pixel-content change goes through here; size-only
-  // updates (= the `ResizeObserver` path below) intentionally
-  // bypass it so a window resize doesn't crossfade every tick.
-  const withViewTransition = (cb: () => void): void => {
-    const docVT = document as Document & {
-      startViewTransition?: (callback: () => void) => unknown;
-    };
-    if (typeof docVT.startViewTransition === 'function') {
-      docVT.startViewTransition(cb);
-    } else {
-      cb();
-    }
-  };
-
-  createEffect(() => {
-    // Subscribe to previewPixels (re-paints when it changes).
-    previewPixels();
-    if (canvasRef) {
-      const canvas = canvasRef;
-      withViewTransition(() => paintPreview(canvas));
-    }
-  });
-
-  onMount(() => {
-    if (!canvasRef) return;
-    const canvas = canvasRef;
-    // Resize re-paints are direct — wrapping them in
-    // `startViewTransition` would crossfade every observer
-    // tick, which reads as the canvas "ghosting" while the
-    // user drags the window edge.
-    const ro = new ResizeObserver(() => paintPreview(canvas));
-    ro.observe(canvas);
-    onCleanup(() => ro.disconnect());
-  });
-
-  // (The byte-size estimate effect was removed along with the
-  // sidebar meter that displayed it. Quality presets carry the
-  // intent; the precise byte count was UI noise.)
-
-  // ── batch thumbnail effect ───────────────────────────────────────
-  //
-  // Generate framed-preview thumbnails for every batch row whenever
-  // the batch scope (file set) or the frame settings change. Runs
-  // sequentially through the worker queue (WASM's photo cache
-  // amortises decode across thumbnails for the same source), so a
-  // 30-file batch costs roughly N · (decode-once + frame-stage)
-  // not N · 2 decode passes.
-  //
-  // A generation gate invalidates in-flight thumbnails when the
-  // user drops a new batch or toggles settings — stale promises
-  // resolve into a no-op instead of writing the wrong preview
-  // into the wrong row.
-  const thumbnailGate = createGenerationGate();
-  let thumbnailDebounce: ReturnType<typeof setTimeout> | null = null;
-  createEffect(
-    on(
-      () => {
-        const files = batchFiles();
-        if (!files) return null;
-        // Track the settings that affect thumbnail rendering — when
-        // any of these change we re-generate the previews.
-        return {
-          files,
-          theme: theme(),
-          layout: layout(),
-          showMeta: showMeta(),
-        };
-      },
-      (scope) => {
-        if (thumbnailDebounce !== null) clearTimeout(thumbnailDebounce);
-        if (!scope) return;
-        thumbnailDebounce = setTimeout(() => {
-          thumbnailDebounce = null;
-          void regenerateBatchThumbnails(scope.files, {
-            theme: scope.theme,
-            layout: scope.layout,
-            show_meta: scope.showMeta,
-          });
-        }, THUMBNAIL_DEBOUNCE_MS);
-      },
-    ),
-  );
-
-  const regenerateBatchThumbnails = async (
-    files: DroppedFile[],
-    options: Omit<FrameOptionsForPrepare, 'max_long_edge'>,
-  ): Promise<void> => {
-    const gen = thumbnailGate.bump();
-    // Revoke previous thumbnails and clear the field on every row so
-    // the gallery shows pulsing placeholders again immediately.
-    setBatchRows((rows) => {
-      for (const r of rows) {
-        if (r.thumbnailUrl) URL.revokeObjectURL(r.thumbnailUrl);
-      }
-      // Destructure to *omit* `thumbnailUrl` rather than set it to
-      // `undefined` — `exactOptionalPropertyTypes` is on in
-      // tsconfig, so the two aren't interchangeable.
-      return rows.map(({ thumbnailUrl: _, ...rest }) => rest);
-    });
-    for (const file of files) {
-      if (!thumbnailGate.isCurrent(gen)) return;
-      try {
-        const blob = await generateThumbnailBlob(file.data, options, THUMBNAIL_LONG_EDGE);
-        if (!thumbnailGate.isCurrent(gen)) return;
-        const url = URL.createObjectURL(blob);
-        setBatchRows((rows) =>
-          rows.map((r) => {
-            if (r.key !== file.name) return r;
-            // Defensive: if a newer generation already wrote a
-            // thumbnail for this row, revoke our late arrival.
-            if (r.thumbnailUrl && !thumbnailGate.isCurrent(gen)) {
-              URL.revokeObjectURL(url);
-              return r;
-            }
-            if (r.thumbnailUrl) URL.revokeObjectURL(r.thumbnailUrl);
-            return { ...r, thumbnailUrl: url };
-          }),
-        );
-      } catch (error) {
-        if (!thumbnailGate.isCurrent(gen)) return;
-        // Thumbnail failure is non-fatal — the gallery keeps the
-        // placeholder visible. Surface the error so it's not silent
-        // (memory: "production error handling — no silent fallbacks").
-        // biome-ignore lint/suspicious/noConsole: thumbnail failure diagnostic
-        console.warn('thumbnail generation failed', file.name, error);
-      }
-    }
-    // Thumbnails are all in flight now; kick off the full-
-    // resolution background pass so the Worker queue runs
-    // thumb → full in that order. Without this sequencing the
-    // batch encode (which dwarfs each thumb in cost) would
-    // grab the Worker first and the user would stare at
-    // pulsing placeholders for the whole batch's duration.
-    if (thumbnailGate.isCurrent(gen)) onProcessBatch();
-  };
-
+  // The shared worker is process-global — disposed once at app
+  // unmount. Sessions clean up their own listeners/gates via
+  // `dispose()`; we route through them here for symmetry.
   onCleanup(() => {
-    if (thumbnailDebounce !== null) clearTimeout(thumbnailDebounce);
-    // Phase G2 — bumping every gate invalidates any in-flight
-    // prepare/prefetch/thumbnail promises so their completion
-    // handlers can't touch the (about-to-be-disposed) signal.
-    prepareGate.bump();
-    thumbnailGate.bump();
-    batchGate.bump();
-    revokeAllBatchUrls();
+    preview.dispose();
+    batch.dispose();
     disposeWorker();
   });
 
-  // ── single-image download ────────────────────────────────────────
-  // Re-prepares at full resolution (no preview cap), then encodes.
-  const onDownloadSingle = async (): Promise<void> => {
-    const current = single();
-    if (!current) return;
-    setBusy(true);
-    setStatus('Framing at full resolution…');
-    const started = performance.now();
-    try {
-      const full = await preparePixels(current.data, buildFrameOptions(effectiveMaxLongEdge()));
-      // Phase F3-lite — `encodeJpeg` slices internally before
-      // worker transfer; a second slice here was redundant. `full`
-      // is consumed immediately after so the cache argument doesn't
-      // apply, but symmetry with the estimate path above keeps the
-      // call-shape consistent.
-      const jpeg = await encodeJpeg(full.rgba, full.width, full.height, quality());
-      const blob = new Blob([uint8ToBuffer(jpeg)], { type: 'image/jpeg' });
-      triggerDownload(blob, framedName(current.name));
-      setStatus(`Saved in ${Math.round(performance.now() - started)} ms`);
-    } catch (error) {
-      setStatus(`Error: ${stringifyError(error)}`);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // ── batch run ────────────────────────────────────────────────────
-  //
-  // Runs eagerly in the background as soon as `batchFiles` is set
-  // and re-runs (debounced) whenever any render-affecting signal
-  // changes. The generation counter + handler-detach guarantee
-  // that stale `done` replies from a superseded run can't write
-  // into the new batch's rows. The user never has to click a
-  // "Process" button — by the time they reach the download
-  // affordance, the resultUrl is already populated.
-  const batchGate = createGenerationGate();
-  let batchProcessHandler: ((event: MessageEvent<WorkerReply>) => void) | null = null;
-  const detachBatchProcessHandler = (): void => {
-    if (batchProcessHandler === null) return;
-    getWorker().removeEventListener('message', batchProcessHandler);
-    batchProcessHandler = null;
-  };
-  const onProcessBatch = (): void => {
-    const files = batchFiles();
-    if (!files) return;
-    const gen = batchGate.bump();
-    // Detach the previous run's listener so it can't race into
-    // the new generation's row state.
-    detachBatchProcessHandler();
-    setStatus(`Processing ${files.length} files in the background…`);
-    const w = getWorker();
-    const handle = (event: MessageEvent<WorkerReply>): void => {
-      if (!batchGate.isCurrent(gen)) return;
-      const msg = event.data;
-      if (msg.kind === 'progress') {
-        setBatchRows((rows) =>
-          rows.map((r) => (r.key === msg.key ? { ...r, status: 'processing' } : r)),
-        );
-      } else if (msg.kind === 'done') {
-        applyBatchResults(msg.results);
-        const ok = msg.results.filter((r) => r.ok).length;
-        setStatus(`Batch done: ${ok}/${msg.results.length} succeeded.`);
-        detachBatchProcessHandler();
-      } else if (msg.kind === 'error' && msg.requestId === null) {
-        setStatus(`Batch failed: ${msg.message}`);
-        setBatchRows((rows) => rows.map((r) => ({ ...r, status: 'error', message: msg.message })));
-        detachBatchProcessHandler();
-      }
-      // Other replies (prepared/encoded/non-batch error) belong to other
-      // requesters and are ignored here.
-    };
-    batchProcessHandler = handle;
-    w.addEventListener('message', handle);
-    const items: BatchItem[] = files.map((f) => ({ key: f.name, bytes: f.data }));
-    const request: WorkerRequest = {
-      kind: 'batch',
-      items,
-      options: buildPipelineOptions(effectiveMaxLongEdge()),
-    };
-    w.postMessage(request);
-  };
-
-  // The full-resolution background batch encode is sequenced
-  // *after* the thumbnail pass (see `regenerateBatchThumbnails`
-  // — its tail call invokes `onProcessBatch`). That ordering
-  // matters: the Worker queue is single-threaded, and a 10-file
-  // full encode is orders of magnitude heavier than each thumb,
-  // so dispatching them concurrently means the user stares at
-  // pulsing placeholders until the whole batch finishes. Sending
-  // thumbs first lets them paint in fast and only then does the
-  // heavy work start. The thumbnail effect already covers every
-  // setting change that should re-encode the batch, so no
-  // separate debounce / generation effect is needed here.
-
-  const applyBatchResults = (results: BatchResult[]): void => {
-    setBatchRows((rows) =>
-      rows.map((r) => {
-        const match = results.find((res) => res.key === r.key);
-        if (!match) return r;
-        if (match.ok) {
-          const blob = new Blob([uint8ToBuffer(match.result)], { type: 'image/jpeg' });
-          const url = URL.createObjectURL(blob);
-          return { ...r, status: 'done', resultUrl: url, message: `${match.elapsed_ms} ms` };
-        }
-        return { ...r, status: 'error', message: match.result };
-      }),
-    );
-  };
-
-  // Bundle every ready row into a single zip and trigger one
-  // download. Using `client-zip` (≈3 kB gzip, streaming) avoids
-  // the "this site wants to download N files" permission prompt
-  // — the user gets exactly one file, named with an ISO-style
-  // timestamp so successive batches sort cleanly in Downloads.
-  const onDownloadAll = async (): Promise<void> => {
-    const ready = batchRows().filter((r) => r.status === 'done' && r.resultUrl);
-    if (ready.length === 0) return;
-    const entries = await Promise.all(
-      ready.map(async (r) => {
-        // `resultUrl` is a blob: URL — `fetch` round-trips back
-        // into the original Blob without copying the underlying
-        // bytes (the blob registry hands out a reference).
-        const blob = await fetch(r.resultUrl as string).then((res) => res.blob());
-        return { name: framedName(r.name), input: blob, lastModified: new Date() };
-      }),
-    );
-    const zipBlob = await downloadZip(entries).blob();
-    const url = URL.createObjectURL(zipBlob);
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    // File-count in the archive name so successive batches read
-    // unambiguously in the Downloads folder ("photo-frame-12-…
-    // .zip" tells the user how many photos are inside without
-    // unzipping). Singular vs plural keeps the chrome friendly.
-    const noun = entries.length === 1 ? 'photo' : 'photos';
-    anchor.download = `photo-frame-${entries.length}${noun}-${timestamp}.zip`;
-    anchor.click();
-    URL.revokeObjectURL(url);
-  };
-
-  // Memoised count of rows whose framed output is ready, used
-  // by the sidebar "Download all" button's label / disabled
-  // state. `total` lets the label read "Download all (4/10)"
-  // while the rest are still encoding.
-  const batchDoneCount = createMemo(() => batchRows().filter((r) => r.status === 'done').length);
-
-  // ── render ───────────────────────────────────────────────────────
   return (
     <div class={appShell({ mode: mode() })}>
-      <header class={appHeader}>
-        <div class={brand}>
-          <button
-            type="button"
-            class={wordmark}
-            // Empty mode: nothing to reset. Disabling removes the
-            // hover affordance and stops keyboard focus from
-            // landing on an inert action.
-            disabled={mode() === 'empty'}
-            aria-label="Start over"
-            title={mode() === 'empty' ? undefined : 'Start over'}
-            onClick={resetToEmpty}
-          >
-            photo-frame
-          </button>
-          <span class={tagline}>Liit-style golden-ratio framing, in your browser.</span>
-        </div>
-        <div class={headerStatus} aria-live="polite">
-          {status()}
-        </div>
-      </header>
+      <AppHeader
+        status={status}
+        disabled={() => mode() === 'empty'}
+        onResetToEmpty={clearSession}
+      />
 
       <main class={stage}>
         <Show when={mode() === 'empty'}>
@@ -832,78 +92,48 @@ export const App = () => {
         </Show>
 
         <Show when={mode() === 'single'}>
-          <div class={stageCanvas} ref={setStageCanvasEl}>
-            {/* Frame size is computed in JS from the measured
-                stage size + source aspect (see `frameSize`).
-                Going through inline `width` / `height` is the
-                only way to get reliable contain-fit when the
-                child is a `<canvas>` — CSS aspect-ratio + max-*
-                tangles with the canvas's intrinsic size in
-                grid-item min-content negotiation. */}
-            <div
-              class={previewFrame}
-              style={
-                frameSize() ?? {
-                  width: '0',
-                  height: '0',
-                  visibility: 'hidden',
-                }
-              }
-            >
-              <canvas ref={canvasRef} class={previewCanvas} />
-            </div>
+          <div class={stageCanvas} ref={preview.actions.setStageEl}>
+            <CanvasPreview pixels={preview.state.pixels} frameSize={preview.state.frameSize} />
           </div>
         </Show>
 
         <Show when={mode() === 'batch'}>
           <div class={stageBatch}>
-            <Gallery rows={batchRows()} />
+            <Gallery rows={batch.state.rows()} />
           </div>
         </Show>
       </main>
 
       <Show when={mode() !== 'empty'}>
         <aside class={sidebar}>
-          <ControlsCommon
-            preset={preset()}
-            onPreset={applyPreset}
-            longEdge={longEdge()}
-            onLongEdge={setLongEdge}
-            sourceLongEdge={sourceLongEdge()}
-            theme={theme()}
-            onTheme={setTheme}
-            layout={layout()}
-            onLayout={setLayout}
-            showMeta={showMeta()}
-            onShowMeta={setShowMeta}
-          />
+          <SidebarControls settings={settings} sourceLongEdge={sourceLongEdge} />
 
           <Show when={mode() === 'single'}>
             <button
               type="button"
               class={button({ intent: 'primary' })}
-              disabled={busy()}
-              onClick={() => void onDownloadSingle()}
+              disabled={preview.state.busy()}
+              onClick={() => void preview.actions.onDownload()}
             >
-              {busy() ? 'Saving…' : 'Download'}
+              {preview.state.busy() ? 'Saving…' : 'Download'}
             </button>
           </Show>
 
           <Show when={mode() === 'batch'}>
-            {/* Processing runs in the background as soon as
-                files are dropped; this is just the harvest
-                button. Label flips through "Download all (N/M)"
-                as rows complete, becomes a plain "Download all"
-                once every row's ready. */}
+            {/* Processing runs in the background as soon as files
+                are dropped (see `state/batch-session.ts`); this is
+                just the harvest button. Label flips through
+                "Download all (N/M)" as rows complete, becomes
+                "Download all (M)" once every row is ready. */}
             <button
               type="button"
               class={button({ intent: 'primary' })}
-              disabled={batchDoneCount() === 0}
-              onClick={() => void onDownloadAll()}
+              disabled={batch.state.doneCount() === 0}
+              onClick={() => void batch.actions.onDownloadAll()}
             >
-              {batchDoneCount() === batchRows().length
-                ? `Download all (${batchRows().length})`
-                : `Download all (${batchDoneCount()}/${batchRows().length})`}
+              {batch.state.doneCount() === batch.state.rows().length
+                ? `Download all (${batch.state.rows().length})`
+                : `Download all (${batch.state.doneCount()}/${batch.state.rows().length})`}
             </button>
           </Show>
 
@@ -917,127 +147,3 @@ export const App = () => {
     </div>
   );
 };
-
-type ControlsProps = {
-  preset: PresetKey;
-  onPreset: (k: PresetKey) => void;
-  longEdge: LongEdgeKey;
-  onLongEdge: (k: LongEdgeKey) => void;
-  /** Source image long edge — drives the Long-edge segmented's
-   *  disabled flags (caps larger than this can't be reached). */
-  sourceLongEdge: number | null;
-  theme: FrameTheme;
-  onTheme: (t: FrameTheme) => void;
-  layout: CaptionLayout;
-  onLayout: (l: CaptionLayout) => void;
-  showMeta: boolean;
-  onShowMeta: (v: boolean) => void;
-};
-
-// The Quality slider used to live here, but it was a leaky
-// abstraction: changing the number didn't snap the Preset
-// segmented above back to a sensible state, and a 1-100 dial
-// without a live preview doesn't communicate "more / less
-// quality" to anyone outside the JPEG encoding world. The
-// preset names (SNS / Standard / Maximum) carry the same
-// information in user-readable form, so the manual dial is
-// gone — `quality` still flows through the signals via
-// `applyPreset`, just not editable on its own.
-const ControlsCommon = (props: ControlsProps) => (
-  <div class={controls}>
-    <Field label="Preset">
-      <Segmented
-        options={Object.entries(PRESETS).map(([key, info]) => ({
-          value: key as PresetKey,
-          label: info.label,
-        }))}
-        value={props.preset}
-        onChange={props.onPreset}
-        ariaLabel="Quality preset"
-      />
-    </Field>
-
-    {/* Resolution lives behind a closed-by-default <details>
-        because Full is the right choice for almost everyone;
-        the picker is here for the minority who deliberately
-        want a smaller export. Pushing it down the visual
-        hierarchy keeps the primary controls (Preset / Theme
-        / Caption) uncluttered without hiding the feature. */}
-    <details class={advancedGroup}>
-      <summary class={advancedSummary}>Resolution</summary>
-      <div class={advancedBody}>
-        <Field label="Long edge">
-          <Segmented
-            options={Object.entries(LONG_EDGE_OPTIONS).map(([key, info]) => {
-              const src = props.sourceLongEdge;
-              const oversize = info.maxLongEdge !== null && src !== null && info.maxLongEdge > src;
-              return {
-                value: key as LongEdgeKey,
-                label: info.label,
-                title: oversize
-                  ? `Source is only ${src} px on the long edge — ${info.maxLongEdge} px would be a no-op`
-                  : info.maxLongEdge === null
-                    ? 'Source size unchanged'
-                    : `Cap at ${info.maxLongEdge} px on the long edge`,
-                disabled: oversize,
-              };
-            })}
-            value={props.longEdge}
-            onChange={props.onLongEdge}
-            ariaLabel="Maximum image size"
-          />
-        </Field>
-      </div>
-    </details>
-
-    <Field label="Background color">
-      <Segmented
-        options={THEMES.map((t) => ({ value: t.value, label: t.label, title: t.description }))}
-        value={props.theme}
-        onChange={props.onTheme}
-        ariaLabel="Frame background colour"
-      />
-    </Field>
-
-    {/* Caption is a single 3-state choice rather than the prior
-        "Layout" picker + "Show metadata" checkbox: when there's
-        no caption, the layout picker has nothing to arrange, so
-        a disabled/hidden control was always going to be a kludge.
-        Folding the two into one segmented makes the dependency
-        explicit — `Off` is its own state, the other two imply
-        "show + arrange this way". */}
-    <Field label="Caption">
-      <Segmented
-        options={CAPTION_MODES.map((m) => ({
-          value: m.value,
-          label: m.label,
-          title: m.description,
-        }))}
-        value={toCaptionMode({ layout: props.layout, showMeta: props.showMeta })}
-        onChange={(v: CaptionMode) => {
-          const next = fromCaptionMode(v, props.layout);
-          props.onShowMeta(next.showMeta);
-          props.onLayout(next.layout);
-        }}
-        ariaLabel="Caption metadata"
-      />
-    </Field>
-  </div>
-);
-
-// `Segmented` + `Field` live in `components/Segmented.tsx` so
-// the picker behaviour (aria-checked, disabled, click events)
-// can be tested under `@solidjs/testing-library`.
-
-// `framedName`, `uint8ToBuffer`, and `stringifyError` now live
-// in `lib/format.ts`; only the DOM-touching `triggerDownload`
-// stays inline since it has no business in the pure-function
-// module.
-function triggerDownload(blob: Blob, name: string): void {
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = name;
-  anchor.click();
-  URL.revokeObjectURL(url);
-}

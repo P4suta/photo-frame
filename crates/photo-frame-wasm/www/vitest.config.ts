@@ -25,11 +25,18 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'lcov'],
       // Coverage targets the testable surface — pure modules in
-      // `src/lib/` and the display-only components. `App.tsx` is
-      // wiring (effects + JSX) that's intentionally not in
-      // scope for unit tests — its logic gets pulled into
-      // `src/lib/*` as the refactor lands.
-      include: ['src/lib/**', 'src/components/**', 'src/Gallery.tsx', 'src/DropZone.tsx'],
+      // `src/lib/`, Solid-reactive primitives in `src/state/`,
+      // and the display-only components. `App.tsx` is wiring
+      // (effects + JSX) that's intentionally not in scope for
+      // unit tests — its logic gets pulled into `src/lib/` /
+      // `src/state/` as the refactor lands.
+      include: [
+        'src/lib/**',
+        'src/state/**',
+        'src/components/**',
+        'src/Gallery.tsx',
+        'src/DropZone.tsx',
+      ],
     },
   },
 });

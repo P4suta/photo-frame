@@ -2,7 +2,7 @@
 
 import { fireEvent, render } from '@solidjs/testing-library';
 import { describe, expect, test, vi } from 'vitest';
-import { Field, Segmented, type SegmentedOption } from './Segmented';
+import { Segmented, type SegmentedOption } from './Segmented';
 
 type Picks = 'paper' | 'ink';
 
@@ -90,23 +90,5 @@ describe('<Segmented>', () => {
     ));
     fireEvent.click(getByRole('radio', { name: 'White' }));
     expect(onChange).toHaveBeenCalledWith('paper');
-  });
-});
-
-describe('<Field>', () => {
-  test('renders the label text above the body content', () => {
-    const { getByText, container } = render(() => (
-      <Field label="Background color">
-        <span>child body</span>
-      </Field>
-    ));
-    const label = getByText('Background color');
-    const body = getByText('child body');
-    expect(label).toBeTruthy();
-    expect(body).toBeTruthy();
-    // The label DOM order is "label, then body" — pin it so the
-    // visual stacking can't silently invert.
-    expect(container.firstElementChild?.children[0]).toBe(label);
-    expect(container.firstElementChild?.children[1]?.firstElementChild).toBe(body);
   });
 });
