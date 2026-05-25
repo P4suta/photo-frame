@@ -6,14 +6,22 @@ import { css } from '../styled-system/css';
 // This produces the dense, mixed-orientation tile look that reads
 // as a "photo set" rather than a uniform grid of φ-portraits.
 //
-// `column-width: phi.5` (~178 px) picks the column count
-// automatically: browsers honour it as "make as many columns
-// as fit, each at least this wide". On a 720 px stage that's
-// 3-4 columns; on a 1200 px stage 5-6. `break-inside: avoid`
-// on each card keeps a row's thumbnail + metadata together
-// when CSS column-balances.
+// Column count is *prescribed*, not derived from `column-width`
+// alone. Browsers given only a min width pick whatever fits and
+// happily settle on 1 column when the stage is narrow — which
+// is what produced the earlier "one tall stack of upscaled
+// thumbs" look. Pinning the count to 3 by default (and 2 on
+// the smDown breakpoint where the sidebar stacks below the
+// stage anyway) guarantees a real tile grid at every width
+// the layout supports.
+//
+// `column-width: phi.5` stays as the *minimum* width — if a
+// 3-column split would make each column narrower than 178 px,
+// the browser drops to fewer columns instead of squashing the
+// thumbs to illegible widths. In practice the φ-split keeps
+// stage wide enough that 3 always fits at the desktop layout.
 export const gallery = css({
-  columnCount: '[auto]',
+  columnCount: '[3]',
   columnWidth: 'phi.5',
   columnGap: 'phi.m1',
   width: 'full',
@@ -24,6 +32,9 @@ export const gallery = css({
   // offset by left padding / bullets.
   margin: '0',
   listStyle: 'none',
+  smDown: {
+    columnCount: '[2]',
+  },
 });
 
 // Card — natural height, driven by the thumbnail's source aspect
