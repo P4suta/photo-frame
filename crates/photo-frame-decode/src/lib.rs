@@ -91,6 +91,9 @@ const fn decode_heic_path(_bytes: &[u8]) -> Result<Photograph, DecodeError> {
 }
 
 fn decode_image(bytes: &[u8], fmt: image::ImageFormat) -> Result<Photograph, DecodeError> {
+    if matches!(fmt, image::ImageFormat::Jpeg) {
+        return decode_jpeg_zune(bytes);
+    }
     let mut img = image::load_from_memory_with_format(bytes, fmt).map_err(DecodeError::Decode)?;
     let exif_outcome = exif::read(bytes);
     let exif_present = exif_outcome.was_present();
@@ -103,6 +106,56 @@ fn decode_image(bytes: &[u8], fmt: image::ImageFormat) -> Result<Photograph, Dec
     span.record("width", width);
     span.record("height", height);
     span.record("exif_present", exif_present);
+    let provenance = exif_outcome
+        .as_parsed()
+        .map_or_else(Provenance::default, provenance::extract);
+    Ok(Photograph::new(pixels, provenance))
+}
+
+/// JPEG-only fast path: drive `zune-jpeg` for the IDCT + colour
+/// conversion, then route the resulting RGBA buffer through the
+/// existing EXIF / orientation pass. zune is ~30–50 % faster than
+/// image-crate's `jpeg-decoder` on `x86_64` because its YCbCr→RGB
+/// conversion uses SSE/AVX2 when available; it falls back to scalar
+/// on wasm32 so the WASM build stays portable.
+fn decode_jpeg_zune(bytes: &[u8]) -> Result<Photograph, DecodeError> {
+    use image::{ImageBuffer, Rgba};
+    use zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
+    use zune_jpeg::JpegDecoder;
+
+    // `JpegDecoder<T>` is generic over `ZByteReaderTrait`; `ZCursor<&[u8]>`
+    // is the no-std cursor that satisfies the trait. `&[u8]` directly
+    // doesn't impl it.
+    let opts = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGBA);
+    let mut decoder = JpegDecoder::new_with_options(ZCursor::new(bytes), opts);
+    let rgba = decoder.decode().map_err(DecodeError::JpegDecode)?;
+    let info = decoder
+        .info()
+        .expect("zune-jpeg: info populated after successful decode");
+    let width = u32::from(info.width);
+    let height = u32::from(info.height);
+
+    // Re-use the existing orientation pass. Wrapping the raw bytes in
+    // an `ImageBuffer` is zero-copy (it just takes ownership of the
+    // Vec); `DynamicImage::ImageRgba8` is a tagged wrapper.
+    let buffer = ImageBuffer::<Rgba<u8>, _>::from_raw(width, height, rgba)
+        .expect("zune-jpeg returned width * height * 4 bytes by construction");
+    let mut img = image::DynamicImage::ImageRgba8(buffer);
+
+    let exif_outcome = exif::read(bytes);
+    let exif_present = exif_outcome.was_present();
+    let orientation_raw = exif::orientation_value(exif_outcome.as_parsed());
+    orientation::apply(&mut img, orientation_raw);
+
+    let rgba = img.into_rgba8();
+    let (final_w, final_h) = rgba.dimensions();
+    let pixels = Pixels::from_rgba8(final_w, final_h, rgba.into_raw())?;
+
+    let span = tracing::Span::current();
+    span.record("width", final_w);
+    span.record("height", final_h);
+    span.record("exif_present", exif_present);
+
     let provenance = exif_outcome
         .as_parsed()
         .map_or_else(Provenance::default, provenance::extract);

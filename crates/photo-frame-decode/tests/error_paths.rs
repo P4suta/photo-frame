@@ -22,14 +22,19 @@ fn random_bytes_return_unknown_format() {
 }
 
 #[test]
-fn truncated_jpeg_returns_decode_variant_with_source_chain() {
+fn truncated_jpeg_returns_jpeg_decode_variant_with_source_chain() {
+    // Phase D1 moved the JPEG path off image-crate onto zune-jpeg,
+    // so the typed variant changed accordingly. The contract that
+    // matters to callers is still preserved: a truncated JPEG
+    // surfaces as a `Category::Decode` error with a `source` chain
+    // pointing at the underlying decoder's diagnostic.
     let mut jpeg = jpeg_solid(8, 8);
     jpeg.truncate(jpeg.len() / 2);
     let err = from_bytes(&jpeg).expect_err("truncated JPEG must fail decode");
-    assert!(matches!(err, DecodeError::Decode(_)));
+    assert!(matches!(err, DecodeError::JpegDecode(_)));
     assert!(
         err.source().is_some(),
-        "Decode variant carries source chain"
+        "JpegDecode variant carries source chain"
     );
 }
 

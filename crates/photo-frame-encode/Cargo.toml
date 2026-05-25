@@ -13,10 +13,23 @@ path = "src/lib.rs"
 
 [dependencies]
 photo-frame-types = { workspace = true }
-image             = { workspace = true }
-thiserror         = { workspace = true }
-miette            = { workspace = true }
-tracing           = { workspace = true }
+# Phase D3 — `jpeg-encoder` companion to zune-jpeg's decoder. Used
+# directly instead of through image-crate so we can pick the
+# chroma subsampling factor (jpeg-encoder auto-selects 4:2:0 for
+# quality < 90, the industry-standard web/SNS choice; image-crate's
+# encoder is locked at 4:4:4 which is unusually heavy for photo
+# output and was the single biggest remaining wall-clock contributor
+# at default options after Phases C1–C4 and D1–D2 landed).
+jpeg-encoder = { workspace = true }
+thiserror    = { workspace = true }
+miette       = { workspace = true }
+tracing      = { workspace = true }
+
+[dev-dependencies]
+# Round-trip tests decode the output to verify dimensions, so the
+# tests still need the image crate's decoder. Production code
+# doesn't link image any more.
+image = { workspace = true }
 
 [lints]
 workspace = true

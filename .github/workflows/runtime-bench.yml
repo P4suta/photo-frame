@@ -1,0 +1,167 @@
+name: runtime-bench
+
+# Runs the divan + (eventually) iai-callgrind harnesses on every PR
+# and posts a sticky comment with the per-stage / per-fixture
+# numbers. Sibling to bench.yml, which covers build/test/lint
+# timings — keep the cache namespace distinct.
+
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      # The bench fixture corpus itself doesn't change the numbers,
+      # but a fixture rename should still re-run so the comment
+      # picks up the new label.
+      - 'artifacts/bench/runtime/**'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: runtime-bench-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  divan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: runtime-bench-${{ runner.os }}
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+
+      - name: Divan bench (short sample-count for PR-time)
+        id: divan
+        run: |
+          mkdir -p artifacts/bench/runtime/pr-${{ github.run_id }}
+          out="artifacts/bench/runtime/pr-${{ github.run_id }}/divan.txt"
+          # 5 samples is enough to spot >10% wall-clock regressions
+          # without making the PR check feel slow. Full sample-count
+          # runs land via the `just bench` workflow on demand.
+          just bench --sample-count 5 --sample-size 1 2>&1 | tee "$out"
+          echo "out=$out" >> "$GITHUB_OUTPUT"
+
+      - name: Format divan output as PR comment body
+        id: comment
+        run: |
+          body="artifacts/bench/runtime/pr-${{ github.run_id }}/comment.md"
+          {
+            echo '### Runtime bench (divan)'
+            echo
+            echo 'Short PR-time run (`--sample-count 5`). Treat as a'
+            echo 'directional check, not a precise number — `just bench`'
+            echo 'locally with the default sample-count gives the'
+            echo 'numbers that go into `BENCHMARKS.md`.'
+            echo
+            echo '```'
+            cat "${{ steps.divan.outputs.out }}"
+            echo '```'
+          } > "$body"
+          echo "body=$body" >> "$GITHUB_OUTPUT"
+
+      - name: Comment on PR
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: runtime-bench-${{ runner.os }}
+          path: ${{ steps.comment.outputs.body }}
+
+      - name: Upload divan artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-bench-${{ github.run_id }}
+          path: artifacts/bench/runtime/pr-${{ github.run_id }}/
+          retention-days: 14
+
+  # iai-callgrind hard-gate. Adds ~3 min per PR for valgrind bootstrap
+  # + 6 bench cases × 2 runs (main baseline + PR comparison). Hardware-
+  # independent so the +5% Ir (instructions) threshold is meaningful
+  # across runners.
+  icount:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need the full history so we can `git checkout` the PR's
+          # merge base for the baseline run.
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Distinct cache namespace so we don't poach the wall-clock
+          # bench cache from `divan` above.
+          shared-key: icount-${{ runner.os }}
+
+      - name: Install valgrind (iai-callgrind backend)
+        run: sudo apt-get install -y --no-install-recommends valgrind
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,cargo-binstall
+
+      - name: Install iai-callgrind-runner
+        run: cargo binstall --no-confirm iai-callgrind-runner
+
+      - name: Detect whether the base commit carries the icount harness
+        # The icount.rs file was added in the same Phase A commit that
+        # introduced this workflow. PRs whose merge base predates that
+        # commit can't be compared (no baseline to save against). For
+        # those, we skip the baseline step and only verify the PR-head
+        # icount harness runs. Subsequent PRs (whose base does have
+        # icount) get the real gate.
+        id: base_has_icount
+        run: |
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          if git show "${BASE_SHA}:crates/photo-frame-bench/benches/icount.rs" > /dev/null 2>&1; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "Base commit ${BASE_SHA} pre-dates the icount harness — skipping baseline comparison for this PR."
+          fi
+
+      - name: Baseline run on PR's merge base
+        if: steps.base_has_icount.outputs.present == 'true'
+        # `--save-baseline=main` writes target/iai/.../main/ which the
+        # comparison step below reads. `=` form is mandatory — the
+        # runner's clap config sets `require_equals = true` on this arg.
+        run: |
+          set -e
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          git checkout "$BASE_SHA"
+          just bench-icount --save-baseline=main
+
+      - name: PR run with regression gate
+        if: steps.base_has_icount.outputs.present == 'true'
+        # `--baseline=main` reads the saved baseline and compares.
+        # `--callgrind-limits='ir=5%'` sets the regression threshold:
+        # any bench case whose Ir (instructions retired) grows by more
+        # than 5 % vs main triggers a failure under `--regression-fail-fast`.
+        run: |
+          set -e
+          git checkout "${{ github.sha }}"
+          just bench-icount \
+            --baseline=main \
+            --callgrind-limits='ir=5%' \
+            --regression-fail-fast
+
+      - name: PR-only icount sanity (no baseline available)
+        if: steps.base_has_icount.outputs.present == 'false'
+        # No baseline exists — just verify the icount harness compiles
+        # and runs on the PR HEAD. Subsequent PRs will pick up the
+        # comparison flow above once main carries the harness.
+        run: |
+          set -e
+          just bench-icount

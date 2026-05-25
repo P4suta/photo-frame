@@ -58,8 +58,15 @@ test:
 
 # ── WASM ─────────────────────────────────────────────────────────────────────
 
+# `env -u RUSTUP_TOOLCHAIN` strips the host environment's stable pin
+# (mise/devcontainer profile sets RUSTUP_TOOLCHAIN=1.95.0 for the
+# rest of the workspace) so rust-toolchain.toml inside the wasm
+# crate can elect its nightly pin instead. The nightly is needed
+# because `wasm-bindgen-rayon` requires `target-feature=+atomics`,
+# which only works with `-Z build-std` (nightly only). All other
+# `just` recipes inherit the host pin unchanged.
 wasm-build:
-    cd crates/photo-frame-wasm && wasm-pack build --target web --release --out-dir www/pkg
+    cd crates/photo-frame-wasm && env -u RUSTUP_TOOLCHAIN wasm-pack build --target web --release --out-dir www/pkg
 
 # Mirror the Geist font files from the frame crate into the web bundle's
 # public/ directory so Vite serves them at /fonts/Geist/. Canonical source
@@ -69,18 +76,34 @@ copy-web-fonts:
     mkdir -p crates/photo-frame-wasm/www/public/fonts/Geist
     cp -p crates/photo-frame-frame/assets/fonts/Geist/. crates/photo-frame-wasm/www/public/fonts/Geist/ -r
 
+# Mirror the coi-serviceworker JS into the web bundle's public/
+# directory. The service worker masquerades as the COOP/COEP HTTP
+# headers SharedArrayBuffer needs on hosts that can't set headers
+# directly (GitHub Pages). Loaded as the very first <script> in
+# index.html so it registers before any module that touches WASM.
+copy-coi-sw:
+    mkdir -p crates/photo-frame-wasm/www/public
+    cp -p crates/photo-frame-wasm/www/node_modules/coi-serviceworker/coi-serviceworker.js \
+          crates/photo-frame-wasm/www/public/coi-serviceworker.js
+
 # Build the Vite/SolidJS web bundle on top of the WASM artefact. Mirrors what
 # `.github/workflows/pages.yml` runs on push to main, so `just ci` catches
 # TypeScript or Vite regressions locally instead of letting Pages discover
 # them after the merge.
 web-build: wasm-build copy-web-fonts
-    cd crates/photo-frame-wasm/www && bun install --frozen-lockfile && bun run build
+    cd crates/photo-frame-wasm/www && bun install --frozen-lockfile
+    just copy-coi-sw
+    cd crates/photo-frame-wasm/www && bun run build
 
 wasm-dev: wasm-build copy-web-fonts
-    cd crates/photo-frame-wasm/www && bun install && bun run dev -- --host 0.0.0.0
+    cd crates/photo-frame-wasm/www && bun install
+    just copy-coi-sw
+    cd crates/photo-frame-wasm/www && bun run dev -- --host 0.0.0.0
 
 wasm-preview: wasm-build copy-web-fonts
-    cd crates/photo-frame-wasm/www && bun install && bun run build && bun run preview -- --host 0.0.0.0
+    cd crates/photo-frame-wasm/www && bun install
+    just copy-coi-sw
+    cd crates/photo-frame-wasm/www && bun run build && bun run preview -- --host 0.0.0.0
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
@@ -110,10 +133,51 @@ watch:
 bench-measure variant="all":
     scripts/bench-build.sh {{ variant }}
 
-# Run the criterion benchmark suite (pipeline hot paths). HTML report
-# lands in target/criterion/<bench>/report/index.html.
-bench:
-    cargo bench -p photo-frame-bench
+# Run the divan benchmark suite (pipeline hot paths). Median wall-clock
+# and MP/s per stage × per fixture are printed to stdout; the BENCHMARKS.md
+# "Runtime performance" section is the curated history. Extra args forward
+# to divan directly: `just bench decode --sample-count 30` runs only the
+# decode group with 30 samples per fixture.
+bench *args:
+    cargo bench -p photo-frame-bench --bench pipeline -- "$@"
+
+# Run iai-callgrind instruction-count benches. Requires `valgrind` at
+# the OS level (`apt install valgrind`) plus the `iai-callgrind-runner`
+# binary from mise.toml. Output goes to target/iai/ and is the basis
+# for the runtime-bench CI regression gate.
+bench-icount *args:
+    cargo bench -p photo-frame-bench --bench icount -- "$@"
+
+# Record a samply CPU profile of a single CLI invocation. Drop the
+# resulting JSON onto https://profiler.firefox.com/ to inspect (or
+# run `samply load target/profiling/trace.json` to open it locally).
+# Requires `samply` (mise installs from cargo:samply) and Linux
+# `kernel.perf_event_paranoid <= 2` (the typical default).
+profile-pipeline fixture:
+    cargo build -p photo-frame-cli --release
+    mkdir -p target/profiling
+    samply record -o target/profiling/trace.json -- \
+        target/release/photo-frame-cli {{ fixture }} -o target/profiling/out.jpg
+    @echo ""
+    @echo "▶ trace saved to target/profiling/trace.json"
+    @echo "▶ open: samply load target/profiling/trace.json"
+    @echo "▶ or upload to https://profiler.firefox.com/"
+
+# Render the per-stage tracing span timeline as a flamegraph SVG.
+# Compiles the CLI with the opt-in `trace` feature so the existing
+# pipeline / decode / frame / encode tracing spans flush to a
+# `.folded` file via tracing-flame, then turns that into an SVG via
+# `inferno-flamegraph` (mise installs from cargo:inferno).
+profile-trace fixture:
+    cargo build -p photo-frame-cli --release --features trace
+    mkdir -p target/profiling
+    ./target/release/photo-frame \
+        --profile-trace=target/profiling/trace.folded \
+        {{ fixture }} -o target/profiling/out.jpg
+    inferno-flamegraph < target/profiling/trace.folded > target/profiling/flamegraph.svg
+    @echo ""
+    @echo "▶ folded:    target/profiling/trace.folded"
+    @echo "▶ svg:       target/profiling/flamegraph.svg (open in any browser)"
 
 # End-to-end CLI tests (binary-level subprocess + stdout / stderr /
 # exit code assertions). WASM playwright suite lives separately under

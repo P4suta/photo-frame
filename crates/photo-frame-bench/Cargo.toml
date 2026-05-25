@@ -1,6 +1,6 @@
 [package]
 name                   = "photo-frame-bench"
-description            = "Criterion benchmarks for the photo-frame pipeline (decode/frame/encode hot paths)."
+description            = "Divan + iai-callgrind benchmarks for the photo-frame pipeline (decode/frame/encode hot paths) and the shared fixture corpus."
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
@@ -11,10 +11,25 @@ publish                = false
 
 [lib]
 path = "src/lib.rs"
-# A bench-only crate: no tests, no doc.
+# Bench-only crate. No unit tests, no doc.gen. The lib carries the
+# fixture loaders that benches share; everything ships only through
+# the dev-targets so the workspace's runtime crates never pull it.
 test  = false
 bench = true
 doc   = false
+
+[dependencies]
+# `image` is needed at *lib* scope because the fixture module
+# synthesises noise JPEGs and probes real-world file dimensions.
+# Lives under `[dependencies]` (not `[dev-dependencies]`) so the
+# library code that benches `use` is consistent at compile time.
+image = { workspace = true }
+# Used by the `resize_fir_lanczos3_to_sns` bench to compare against
+# the image-crate baseline in `resize_lanczos3_to_sns`. The renderer
+# itself depends on fast_image_resize through photo-frame-frame;
+# the bench depends on it directly so the apples-to-apples row uses
+# the same crate signature.
+fast_image_resize = { workspace = true }
 
 [dev-dependencies]
 photo-frame        = { workspace = true }
@@ -22,11 +37,27 @@ photo-frame-decode = { workspace = true }
 photo-frame-encode = { workspace = true }
 photo-frame-frame  = { workspace = true }
 photo-frame-types  = { workspace = true }
-image              = { workspace = true }
-criterion          = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+# Bench framework. Replaces criterion 0.5 — divan reports MP/s via
+# `ItemsCount`, tracks allocations natively (Phase B will lean on
+# this), and has a cleaner `args = …` parameterisation for the
+# per-fixture / per-stage matrix. `cargo bench -p photo-frame-bench`
+# still drives the harness because `harness = false` below defers
+# to our `fn main` in benches/pipeline.rs.
+divan = "0.1"
+# Instruction-count bench, valgrind backend. Hardware-independent so
+# CI can rely on a strict regression threshold instead of fighting
+# wall-clock noise. Requires the `iai-callgrind-runner` binary at
+# the matching version on $PATH and `valgrind` installed at the OS
+# level (mise.toml pins the runner; Dockerfile installs valgrind for
+# the dev image).
+iai-callgrind = "0.16"
 
 [[bench]]
 name    = "pipeline"
+harness = false
+
+[[bench]]
+name    = "icount"
 harness = false
 
 [lints]

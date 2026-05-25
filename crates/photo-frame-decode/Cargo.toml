@@ -20,12 +20,25 @@ heif = ["dep:libheif-rs"]
 
 [dependencies]
 photo-frame-types = { workspace = true }
-image             = { workspace = true }
-kamadak-exif      = { workspace = true }
-thiserror         = { workspace = true }
-miette            = { workspace = true }
-tracing           = { workspace = true }
-libheif-rs        = { version = "1", optional = true }
+# Used for PNG / TIFF / BMP / WebP decode and for the
+# `DynamicImage::apply_orientation` helper. JPEG decode no longer
+# goes through this crate — see zune-jpeg below.
+image        = { workspace = true }
+# Fast pure-Rust JPEG decoder (internal SIMD on x86_64, scalar on
+# wasm32). Replaces the image-crate JPEG path for the most common
+# input format; PERF-REPORT-baseline.md ranked decode at 22 % of
+# pipeline wall-clock, with JPEG dominating that.
+zune-jpeg    = { workspace = true }
+# `zune-core` carries the `ColorSpace` / `DecoderOptions` types
+# `zune-jpeg` consumes — we set the output colorspace to RGBA8 so
+# the orientation pass can re-use the existing
+# `DynamicImage::apply_orientation` code path without a refactor.
+zune-core    = { workspace = true }
+kamadak-exif = { workspace = true }
+thiserror    = { workspace = true }
+miette       = { workspace = true }
+tracing      = { workspace = true }
+libheif-rs   = { version = "1", optional = true }
 
 [dev-dependencies]
 # Captures `tracing` events during tests so we can pin warn/debug messages

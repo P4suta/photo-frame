@@ -1,0 +1,17 @@
+# Workspace-level cargo overrides.
+#
+# Lives at `.cargo/config.toml` so any `cargo`/`wasm-pack`/`bacon`
+# invocation from the workspace root (or any subdir) picks it up
+# without per-call `--config` flags.
+
+# Phase F1 — wasm SIMD-128. Several of our perf-critical deps
+# (zune-jpeg, fast_image_resize, jpeg-encoder) ship code that
+# uses `core::arch::wasm32::*` intrinsics behind `cfg(target_feature
+# = "simd128")`. Without this flag those code paths compile out
+# silently on wasm32; with it the same source produces a wasm
+# binary that uses 128-bit vector ops where the CPU/runtime
+# supports them. All evergreen browsers have shipped wasm SIMD for
+# years (Chrome ≥ 91, Firefox ≥ 89, Safari ≥ 16.4), so no
+# detection fallback is needed.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+simd128"]

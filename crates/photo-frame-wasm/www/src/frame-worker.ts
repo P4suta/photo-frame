@@ -28,7 +28,12 @@
  * the cached RGBA.
  */
 
-import init, { encode_jpeg, frame_batch, render_pixels } from '../pkg/photo_frame_wasm.js';
+import init, {
+  encode_jpeg,
+  frame_batch,
+  initThreadPool,
+  render_pixels,
+} from '../pkg/photo_frame_wasm.js';
 import type { FrameOptionsForPrepare, PipelineOptions } from './frame-client';
 
 export type BatchItem = {
@@ -99,7 +104,30 @@ export type WorkerReply = PreparedReply | EncodedReply | WorkerProgress | Worker
 
 let wasmReady: Promise<void> | null = null;
 const ensureReady = (): Promise<void> => {
-  wasmReady ??= init().then(() => undefined);
+  wasmReady ??= (async () => {
+    await init();
+    // Phase F2 — bring the rayon worker pool online if the host
+    // page has SharedArrayBuffer support (set by COOP/COEP headers
+    // in dev, by coi-serviceworker on GitHub Pages). When absent we
+    // skip silently and rayon-aware code paths (compose_canvas
+    // par_chunks_mut, fast_image_resize internals) fall back to
+    // single-thread — the WASM module still runs, just without
+    // intra-image parallelism. navigator.hardwareConcurrency is
+    // the standard heuristic for pool size; clamp at 8 so we don't
+    // spawn more workers than the typical browser cap on Web
+    // Workers per origin.
+    if (typeof SharedArrayBuffer !== 'undefined') {
+      const cores = Math.min(8, Math.max(2, navigator.hardwareConcurrency ?? 4));
+      try {
+        await initThreadPool(cores);
+      } catch (err) {
+        // Browser refused to spawn workers despite SAB being present
+        // (uncommon — usually CSP). Fall back to single-thread.
+        // biome-ignore lint/suspicious/noConsole: worker boot diagnostic
+        console.warn('photo-frame-wasm: initThreadPool failed, falling back', err);
+      }
+    }
+  })();
   return wasmReady;
 };
 

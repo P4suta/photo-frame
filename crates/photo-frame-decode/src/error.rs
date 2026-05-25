@@ -54,6 +54,22 @@ pub enum DecodeError {
     )]
     Decode(#[source] image::ImageError),
 
+    // zune-jpeg path (Phase D1). Separate variant so the diagnostic
+    // surface keeps the decoder's identity — `Decode(image::ImageError)`
+    // would silently absorb a corrupted-JPEG failure even though the
+    // image crate didn't see it.
+    #[error("failed to decode JPEG via zune-jpeg")]
+    #[diagnostic(
+        code(photo_frame::decode::jpeg_decode_error),
+        help(
+            "zune-jpeg rejected the input. Likely causes: truncated \
+             download, wrong file extension, or a JPEG variant zune \
+             doesn't support (e.g. lossless JPEG). For a workaround, \
+             re-export the file through any standard photo editor."
+        )
+    )]
+    JpegDecode(#[source] zune_jpeg::errors::DecodeErrors),
+
     #[cfg(feature = "heif")]
     #[error("failed to decode HEIC image via libheif")]
     #[diagnostic(
@@ -81,7 +97,7 @@ impl Categorize for DecodeError {
     fn category(&self) -> Category {
         match self {
             Self::EmptyInput | Self::UnknownFormat | Self::HeifFeatureDisabled => Category::Input,
-            Self::Decode(_) => Category::Decode,
+            Self::Decode(_) | Self::JpegDecode(_) => Category::Decode,
             #[cfg(feature = "heif")]
             Self::HeifDecode(_) => Category::Decode,
             Self::InvalidPixels(_) => Category::Internal,

@@ -1,8 +1,10 @@
 //! End-to-end rendering: downscale → compose canvas → draw caption →
 //! return packed RGBA8 [`Pixels`].
 
-use image::{imageops, imageops::FilterType, DynamicImage, ImageBuffer, Rgba, RgbaImage};
+use fast_image_resize as fir;
+use image::{DynamicImage, ImageBuffer, Rgba, RgbaImage};
 use photo_frame_types::{Photograph, Pixels};
+use rayon::prelude::*;
 
 use crate::format::{caption_from, Caption};
 use crate::geometry::{self, Layout, MetaLayout};
@@ -26,13 +28,18 @@ use crate::text::{Renderer, Weight};
         caption_visible = tracing::field::Empty,
     ),
 )]
-pub(crate) fn render(photo: &Photograph, opts: &FrameOptions) -> Pixels {
-    let upright = pixels_to_rgba_image(&photo.pixels);
+pub(crate) fn render(photo: Photograph, opts: &FrameOptions) -> Pixels {
+    // Destructure the Photograph so the pixel buffer can move into
+    // `ImageBuffer::from_raw` (zero-copy) while the provenance stays
+    // borrowed for caption formatting. Phase C1 — eliminates the 92 MB
+    // `.to_vec()` copy the v1 path paid at the renderer boundary.
+    let Photograph { pixels, provenance } = photo;
+    let upright = pixels_to_rgba_image(pixels);
     let upright = maybe_downscale(upright, opts.max_long_edge);
 
     let caption = match opts.meta_policy {
         MetaPolicy::Never => Caption::default(),
-        MetaPolicy::Auto => caption_from(&photo.provenance),
+        MetaPolicy::Auto => caption_from(&provenance),
     };
     let caption_visible = !caption.is_empty();
 
@@ -48,13 +55,15 @@ pub(crate) fn render(photo: &Photograph, opts: &FrameOptions) -> Pixels {
         .expect("geometry guarantees a positive RGBA8 canvas")
 }
 
-fn pixels_to_rgba_image(pixels: &Pixels) -> RgbaImage {
-    ImageBuffer::<Rgba<u8>, _>::from_raw(
-        pixels.width(),
-        pixels.height(),
-        pixels.as_rgba8().to_vec(),
-    )
-    .expect("Pixels invariants guarantee width * height * 4 bytes")
+/// Take ownership of the decoder's pixel buffer and reinterpret it as
+/// an `RgbaImage` without copying. `Pixels::into_parts` was designed
+/// for exactly this handoff (`crates/photo-frame-types/src/pixels.rs`)
+/// — `image::ImageBuffer::from_raw` accepts a `Vec<u8>` by move and
+/// does no further allocation.
+fn pixels_to_rgba_image(pixels: Pixels) -> RgbaImage {
+    let (width, height, data) = pixels.into_parts();
+    ImageBuffer::<Rgba<u8>, _>::from_raw(width, height, data)
+        .expect("Pixels invariants guarantee width * height * 4 bytes")
 }
 
 fn maybe_downscale(img: RgbaImage, max_long_edge: Option<u32>) -> RgbaImage {
@@ -75,9 +84,21 @@ fn maybe_downscale(img: RgbaImage, max_long_edge: Option<u32>) -> RgbaImage {
         to_h = new_h,
         "downscaled"
     );
-    DynamicImage::ImageRgba8(img)
-        .resize(new_w, new_h, FilterType::Lanczos3)
-        .to_rgba8()
+
+    // Phase D2 — `fast_image_resize` replaces `DynamicImage::resize`.
+    // The crate auto-selects SSE/AVX2 (or wasm-SIMD-128 when built
+    // with `+simd128`) for the Lanczos3 convolution, and the
+    // `rayon` feature splits the destination by rows across worker
+    // threads. The image crate's resize was single-threaded scalar
+    // and dominated SNS-preset wall-clock at ~440 ms / 24 MP.
+    let src = DynamicImage::ImageRgba8(img);
+    let mut dst = DynamicImage::ImageRgba8(ImageBuffer::<Rgba<u8>, _>::new(new_w, new_h));
+    let options = fir::ResizeOptions::new()
+        .resize_alg(fir::ResizeAlg::Convolution(fir::FilterType::Lanczos3));
+    fir::Resizer::new()
+        .resize(&src, &mut dst, &options)
+        .expect("fir: matched pixel types (RGBA8↔RGBA8) and valid dimensions");
+    dst.into_rgba8()
 }
 
 fn compose_canvas(
@@ -87,14 +108,7 @@ fn compose_canvas(
     opts: &FrameOptions,
 ) -> RgbaImage {
     let (canvas_w, canvas_h) = layout.canvas_size;
-    let mut canvas = RgbaImage::from_pixel(canvas_w, canvas_h, opts.theme.background());
-
-    imageops::replace(
-        &mut canvas,
-        photo,
-        i64::from(layout.photo_origin.0),
-        i64::from(layout.photo_origin.1),
-    );
+    let mut canvas = build_canvas_with_photo(canvas_w, canvas_h, photo, layout, opts);
 
     if let Some(ml) = layout.meta.as_ref() {
         let renderer = Renderer::new(opts.theme.ink());
@@ -109,6 +123,88 @@ fn compose_canvas(
     }
 
     canvas
+}
+
+/// Phase C4 — single-pass row-parallel canvas build.
+///
+/// Replaces the previous two-pass sequence
+/// (`RgbaImage::from_pixel` to fill with bg, then `imageops::replace`
+/// to overwrite the photo region). Each row is independent, so we
+/// allocate the destination Vec up-front and have rayon dispatch
+/// rows to worker threads. Each row does at most three memcpy / memset
+/// operations: left margin (bg), photo bytes, right margin (bg).
+/// Rows above/below the photo are a single memset.
+///
+/// Single-pass also halves memory traffic (was 2× canvas-size scans:
+/// once to fill, once to overwrite). For a 24 MP canvas (~98 MB),
+/// that's the difference between ~200 MB and ~100 MB of L1/L2-miss
+/// load, on top of the parallel speedup.
+fn build_canvas_with_photo(
+    canvas_w: u32,
+    canvas_h: u32,
+    photo: &RgbaImage,
+    layout: &Layout,
+    opts: &FrameOptions,
+) -> RgbaImage {
+    let bg = opts.theme.background();
+    let bg_bytes = bg.0;
+    let canvas_stride = (canvas_w as usize) * 4;
+    let total_bytes = (canvas_h as usize) * canvas_stride;
+
+    let (photo_origin_x, photo_origin_y) = layout.photo_origin;
+    let (photo_width, photo_height) = photo.dimensions();
+    let photo_left = photo_origin_x as usize;
+    let photo_top = photo_origin_y as usize;
+    let photo_bottom = photo_top + (photo_height as usize);
+    let photo_byte_stride = (photo_width as usize) * 4;
+    let photo_data = photo.as_raw();
+    let photo_byte_offset = photo_left * 4;
+
+    // Layout invariant: the geometry layer (`crate::geometry`) only ever
+    // produces a canvas big enough to contain the photo rectangle at
+    // the given origin. Assert it here so an out-of-bounds origin is a
+    // loud panic, not a silent slice OOB inside the parallel block.
+    debug_assert!(photo_left + (photo_width as usize) <= canvas_w as usize);
+    debug_assert!(photo_bottom <= canvas_h as usize);
+
+    let mut canvas_data: Vec<u8> = vec![0_u8; total_bytes];
+
+    canvas_data
+        .par_chunks_mut(canvas_stride)
+        .enumerate()
+        .for_each(|(y, row)| {
+            // Rows outside the photo's vertical extent: pure bg.
+            if y < photo_top || y >= photo_bottom {
+                fill_row_with_bg(row, bg_bytes);
+                return;
+            }
+            // Inside the photo's vertical extent: left margin bg, photo
+            // bytes, right margin bg. Empty margins (photo_x = 0 or
+            // photo flush right) skip the corresponding fill.
+            if photo_byte_offset > 0 {
+                fill_row_with_bg(&mut row[..photo_byte_offset], bg_bytes);
+            }
+            let src_y = y - photo_top;
+            let src_start = src_y * photo_byte_stride;
+            row[photo_byte_offset..photo_byte_offset + photo_byte_stride]
+                .copy_from_slice(&photo_data[src_start..src_start + photo_byte_stride]);
+            let right_start = photo_byte_offset + photo_byte_stride;
+            if right_start < row.len() {
+                fill_row_with_bg(&mut row[right_start..], bg_bytes);
+            }
+        });
+
+    RgbaImage::from_raw(canvas_w, canvas_h, canvas_data)
+        .expect("canvas buffer length matches canvas_w * canvas_h * 4 by construction")
+}
+
+/// Fill `row` (which must be `n * 4` bytes long) with repeating `bg`
+/// quartets. `slice::chunks_exact_mut(4)` codegens to a tight memset
+/// when the optimiser recognises the constant-fill pattern.
+fn fill_row_with_bg(row: &mut [u8], bg: [u8; 4]) {
+    for px in row.chunks_exact_mut(4) {
+        px.copy_from_slice(&bg);
+    }
 }
 
 fn draw_caption_edges(
@@ -208,7 +304,7 @@ mod tests {
     fn render_without_caption_uses_symmetric_thin_border() {
         let photo = solid_photo(200, 100, Provenance::default());
         let opts = FrameOptions::default();
-        let out = render(&photo, &opts);
+        let out = render(photo, &opts);
         // side = side_for(min(200,100)) = side_for(100) = max(round(100/φ⁶), 8) = 8
         // bottom collapses to side when caption empty → canvas = (200+16, 100+16) = (216, 116)
         assert_eq!(out.width(), 216);
@@ -226,7 +322,7 @@ mod tests {
         };
         let photo = solid_photo(200, 100, prov);
         let opts = FrameOptions::default();
-        let out = render(&photo, &opts);
+        let out = render(photo, &opts);
         // side = 8, bottom = round(8·φ²) = 21 (instead of 8 collapse) → h = 100+8+21 = 129
         assert_eq!(out.width(), 216);
         assert_eq!(out.height(), 129);
@@ -248,7 +344,7 @@ mod tests {
             meta_policy: MetaPolicy::Never,
             ..Default::default()
         };
-        let out = render(&photo, &opts);
+        let out = render(photo, &opts);
         assert_eq!(out.height(), 116, "bottom strip must collapse with Never");
     }
 
@@ -259,7 +355,7 @@ mod tests {
             max_long_edge: Some(100),
             ..Default::default()
         };
-        let out = render(&photo, &opts);
+        let out = render(photo, &opts);
         // After downscale: long edge clamped to 100, short edge halved → 100×50.
         // side_for(50) = max(round(50/φ⁶), 8) = 8 → canvas = (100+16, 50+16) = (116, 66)
         assert_eq!(out.width(), 116);
@@ -273,7 +369,7 @@ mod tests {
             max_long_edge: Some(100),
             ..Default::default()
         };
-        let out = render(&photo, &opts);
+        let out = render(photo, &opts);
         // 80x40 already <= 100 long edge: pass through.
         // side_for(40) = max(round(40/φ⁶), 8) = 8 → canvas = (80+16, 40+16) = (96, 56)
         assert_eq!(out.width(), 96);
@@ -283,7 +379,7 @@ mod tests {
     #[test]
     fn rendered_buffer_length_matches_dimensions() {
         let photo = solid_photo(80, 60, Provenance::default());
-        let out = render(&photo, &FrameOptions::default());
+        let out = render(photo, &FrameOptions::default());
         assert_eq!(
             out.as_rgba8().len(),
             (out.width() * out.height() * 4) as usize
@@ -296,7 +392,7 @@ mod tests {
         use image::Rgba;
         let photo = solid_photo(80, 60, Provenance::default());
         let out = render(
-            &photo,
+            photo,
             &FrameOptions {
                 theme: FrameTheme::Ink,
                 ..Default::default()
@@ -320,7 +416,7 @@ mod tests {
     fn paper_theme_paints_corner_pixels_with_white() {
         use image::Rgba;
         let photo = solid_photo(80, 60, Provenance::default());
-        let out = render(&photo, &FrameOptions::default());
+        let out = render(photo, &FrameOptions::default());
         let buf = out.as_rgba8();
         assert_eq!(&buf[0..4], Rgba([255, 255, 255, 255]).0.as_slice());
     }
@@ -347,7 +443,7 @@ mod tests {
             ..Default::default()
         };
         let photo = solid_photo(800, 600, prov);
-        let out = render(&photo, &FrameOptions::default());
+        let out = render(photo, &FrameOptions::default());
         // We don't pin exact dimensions here (geometry tests cover that);
         // we just verify the output is sane and the strip expanded.
         assert!(out.width() > 800);

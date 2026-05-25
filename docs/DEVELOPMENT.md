@@ -132,7 +132,7 @@ docker run --rm -v $PWD:/data photo-frame /data/input.jpg -o /data/out.jpg
 ```bash
 just test        # full workspace (nextest + doc tests)
 just e2e         # CLI end-to-end (binary-level)
-just bench       # criterion (warm baseline + HTML report)
+just bench       # divan per-stage / per-fixture; see BENCHMARKS.md Runtime section
 just cov         # llvm-cov → lcov.info
 ```
 
@@ -161,7 +161,7 @@ crates/              workspace members
   photo-frame/          facade: pipeline() + re-exports
   photo-frame-cli/      `photo-frame` binary; tests/e2e.rs
   photo-frame-wasm/     wasm-bindgen surface for the browser
-  photo-frame-bench/    criterion benchmark suite
+  photo-frame-bench/    divan benchmark suite + shared bench fixtures
 deny.toml             cargo-deny config (bans / licences / advisories / sources)
 docs/                 EVENTS.md (event catalogue), DEVELOPMENT.md (this file)
 Dockerfile            multi-stage: chef-base / planner / cacher / builder / runtime / dev

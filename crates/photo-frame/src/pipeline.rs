@@ -50,7 +50,7 @@ impl Categorize for PipelineError {
 )]
 pub fn pipeline(bytes: &[u8], opts: &PipelineOptions) -> Result<Vec<u8>, PipelineError> {
     let photo = photo_frame_decode::from_bytes(bytes)?;
-    let framed = photo_frame_frame::render(&photo, &opts.frame);
+    let framed = photo_frame_frame::render(photo, &opts.frame);
     let out = photo_frame_encode::jpeg(&framed, &opts.jpeg)?;
     tracing::Span::current().record("output_bytes", out.len());
     Ok(out)

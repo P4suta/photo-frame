@@ -1,0 +1,28 @@
+# WASM-crate-local cargo config.
+#
+# Loaded only when cargo runs from inside `crates/photo-frame-wasm/`
+# (cargo's config lookup walks up from CWD). The workspace's root
+# `.cargo/config.toml` still applies on top, but the per-target
+# `rustflags` array set here overrides the root's wasm32 entry for
+# this crate's builds.
+#
+# `-Z build-std` rebuilds the standard library from source against
+# the same `target-feature` set. That's the piece nightly Rust
+# provides over stable: stable's pre-built std doesn't include
+# atomic operations, so `cfg(target_feature = "atomics")` is false
+# at compile time and `wasm-bindgen-rayon`'s `compile_error!` fires.
+# With `build-std` enabled (nightly only — see the sibling
+# `rust-toolchain.toml`), std is rebuilt with the listed features
+# and the cfg evaluates to true.
+
+[unstable]
+build-std = ["panic_abort", "std"]
+
+[target.wasm32-unknown-unknown]
+# +simd128: zune-jpeg / fast_image_resize / jpeg-encoder SIMD paths.
+# +atomics, +bulk-memory, +mutable-globals: wasm-threads ABI for
+# wasm-bindgen-rayon. Order matches the wasm-bindgen-rayon README.
+rustflags = [
+    "-C",
+    "target-feature=+simd128,+atomics,+bulk-memory,+mutable-globals",
+]

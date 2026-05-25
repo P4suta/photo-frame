@@ -159,3 +159,123 @@ Raw JSON: `artifacts/bench/mold_cli_relink.json` (kept locally).
 | GH Actions wall-clock | -50% | parallel jobs (Phase 2) |
 
 These are aspirational; real numbers will land here as each phase completes.
+
+## Runtime performance
+
+Separate measurement track for the **image-processing pipeline itself**
+(decode → frame → encode), as opposed to the build / test / lint timings
+above. Driven by the divan harness in `crates/photo-frame-bench/`
+(`just bench`). Every entry is the median of a sample run; the raw
+divan output lives under `artifacts/bench/runtime/<UTC>/`.
+
+The fixture matrix is fixed once for the lifetime of the project so
+rows across phases stay comparable. The workspace `.gitignore` excludes
+image binaries, so the **real-world fixtures are local-only** — on CI
+and clean clones, the bench harness logs a one-line warning and runs
+the synth-only subset. The synth fixtures alone are enough for
+regression detection; the real-world rows in the table below capture
+"as measured on the author's machine" snapshots that future runs need
+to reproduce by dropping the same files into `examples/`.
+
+| Fixture | Source | Dimensions | EXIF orient. | Notes |
+| --- | --- | ---: | :---: | --- |
+| `real_z5_landscape_a_24mp` | `examples/IMG_3936.JPG` | 6016×4016 | 1 | Nikon Z 5 native landscape |
+| `real_z5_landscape_b_24mp` | `examples/IMG_3939.JPG` | 6016×4016 | 1 | second sample, same camera |
+| `real_z5_portrait_rot8_24mp` | `examples/IMG_3940.JPG` | 6016×4016 | 8 | exercises 90° CCW rotation |
+| `synth_noise_4mp_2400x1600` | xorshift RGB → JPEG q85 | 2400×1600 | 1 | smartphone-class |
+| `synth_noise_12mp_4240x2832` | xorshift RGB → JPEG q85 | 4240×2832 | 1 | mid-range mirrorless |
+| `synth_noise_24mp_6016x4016` | xorshift RGB → JPEG q85 | 6016×4016 | 1 | matches Z 5 sensor MP count |
+| `synth_noise_panorama_10000x100` | xorshift RGB → JPEG q85 | 10000×100 | 1 | extreme aspect, edge cases |
+
+### Baseline (Phase A, commit `1dcbfdf`)
+
+Raw output: [`artifacts/bench/runtime/20260525T001511Z/`](artifacts/bench/runtime/20260525T001511Z/).
+Host: Linux 6.8.0-117-generic x86_64, rustc 1.95.0, cargo 1.95.0,
+divan 0.1.21, sample-count=10.
+
+Median wall-clock per stage (ms) and throughput (MP/s, computed against
+the **source** pixel count, not the framed canvas):
+
+| Stage \ Fixture | `r_z5_la_a` | `r_z5_la_b` | `r_z5_pt8` | `synth_4mp` | `synth_12mp` | `synth_24mp` | `panorama` |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `decode` (ms)            | 268  | 225  | 357  | 86   | 270  | 546  | 20.0 |
+| `decode` (MP/s)          | 90.0 | 107  | 67.7 | 44.5 | 44.6 | 44.2 | 49.9 |
+| `resize_lanczos3_to_sns` (ms) | 440  | 436  | 439  | 167  | 272  | 439  | 9.9  |
+| `frame` (ms, no resize)  | 131  | 131  | 130  | 9.1  | 63.4 | 126  | 2.2  |
+| `encode` q92 (ms)        | 819  | 776  | 755  | 227  | 732  | 1423 | 58.1 |
+| `pipeline` (ms)          | 1245 | 1143 | 1266 | 333  | 1097 | 2111 | 79.4 |
+| `pipeline` (MP/s)        | 19.4 | 21.1 | 19.1 | 11.5 | 10.9 | 11.4 | 12.6 |
+
+Three observations from the baseline that **the plan must take as data,
+not as preconception**:
+
+1. **Encode dominates.** On the representative 24 MP real-world fixture
+   the JPEG encode at q92 takes 819 ms — **66 %** of the 1.25 s
+   pipeline wall-clock. Decode is 22 %, frame (no resize) is 10 %.
+   Optimisation priority points first at encode, then decode.
+
+2. **EXIF orientation=8 costs ~30 % at decode.** Comparing the two
+   landscape fixtures (decode median 247 ms avg) against the rotated
+   portrait (357 ms), orientation rotation is a real cost line, not a
+   rounding error. Phase B should split it out for isolated measurement.
+
+3. **Synthetic ≠ real.** The synth noise fixtures decode at
+   ~44 MP/s vs the real-world ones at ~90-107 MP/s. Xorshift produces
+   maximum-entropy JPEGs that the decoder works harder on. Useful as a
+   pessimistic upper bound, but real-world numbers are the ones we
+   actually want to move.
+
+### Per-phase deltas (runtime)
+
+After each phase lands a row appends below with new medians on the
+same fixture × stage matrix. Negative = faster.
+
+| Phase | Snapshot | 24 MP real `pipeline` | 24 MP real `decode` | 24 MP real `encode` | 24 MP real `frame` | Notes |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| baseline | `1dcbfdf` | 1.25 s | 268 ms | 819 ms | 131 ms | encode = 66 % of pipeline; rotation costs +30 % at decode |
+| C1 zero-copy `Pixels` handoff | post-C1 | **1.17 s** (-6 %) | 270 ms (noise) | 806 ms (-1.5 %) | **92 ms** (-30 %) | dhat: total alloc 535 MB → 439 MB (-97 MB ≈ one 92 MB RGBA buffer), peak 336 → 243 MB |
+| D1 zune-jpeg JPEG decode | post-D1 | **1.11 s** (-11 % vs baseline) | **217 ms** (-19 %) | 788 ms (-2 %, noise) | 94 ms | dhat: total alloc 439 MB → 353 MB (-86 MB, zune allocates less than image-crate's jpeg-decoder); peak unchanged at 243 MB. Decode wins range from -9 % (orientation=8, IDCT not on critical path) to -23 % (landscape) — confirms zune's SIMD YCbCr→RGB is the dominant accelerator |
+| D2 fast_image_resize | post-D2 | 1.10 s (default, no change — resize not on default path) | 217 ms | 788 ms | 91 ms | **Resize itself: 438 → 113 ms (-74 %, ~4×)** on 24 MP. SNS-preset pipeline (CLI `--preset sns`) on 24 MP real Z 5: **0.47 s end-to-end** vs estimated ~0.80 s with image-crate resize. `resize_fir_lanczos3_to_sns` bench: 213 MP/s (was 55 MP/s with image-crate). rayon worker pool + SIMD per-row Lanczos3. WASM build green — fir falls back to single-thread on wasm32 |
+| C4 row-parallel compose canvas | post-C4 | **1.02 s** (-18 % vs baseline, -7 % vs D2) | 216 ms | 787 ms | **18 ms** (-86 % vs baseline, -80 % vs D2) | Single-pass row-parallel `build_canvas_with_photo` replaces the two-pass `from_pixel` + `imageops::replace` sequence. Each canvas row is dispatched to a rayon worker that fills bg + copies the photo bytes + fills the remaining bg, all in one cache-friendly walk. Compose throughput: 184 MP/s → **1.33 GP/s** (7× faster). Panorama frame: 1.79 ms → 0.30 ms (6× faster). No memory regression (the `vec![0; n]` zero-init is cheaper than `from_pixel` was) |
+| D3 jpeg-encoder JPEG output | post-D3 | **662 ms** (-47 % vs baseline, -35 % vs C4) | 216 ms | **424 ms** (-48 % vs baseline, -46 % vs C4) | 18 ms | `image::codecs::jpeg::JpegEncoder` → `jpeg_encoder::Encoder`. jpeg-encoder ships a SIMD-optimised DCT + Huffman path (AVX2 on x86_64); the swap halves encode wall-clock at the same `quality=92` setting (same 4:4:4 chroma — auto-4:2:0 only kicks in for q<90, so the win here is purely the SIMD encoder, not the format change). SNS preset (q78, auto-4:2:0): pipeline_sns 374 ms → **314 ms** (-16 %, smaller because SNS is already chroma-subsampled). The encode crate dropped its `image` dep entirely (now uses `jpeg-encoder` + the existing `photo-frame-types::Pixels`) so the runtime dep tree is tighter by one large transitive |
+
+### Aggregate (baseline → post-D3 on 24 MP real Z 5 landscape)
+
+| stage | baseline | post-D3 | total Δ |
+| --- | ---: | ---: | ---: |
+| decode | 268 ms | 216 ms | -19 % |
+| frame | 131 ms | **18 ms** | **-86 %** |
+| encode q92 | 819 ms | **424 ms** | **-48 %** |
+| **pipeline default** | **1245 ms** | **662 ms** | **-47 %** (≈ 2× wall-clock) |
+| **pipeline SNS** | **~1500–1800 ms** | **314 ms** | **~-80 %** (~5× wall-clock) |
+
+Memory profile (dhat, same input):
+* baseline total alloc 535 MB → **post-D3 ≤ 353 MB** (-34 %);
+* peak unchanged from D1 onward.
+
+The pipeline is now encode-balanced rather than encode-dominated:
+424 ms / 662 ms = **64 %** of default wall-clock, still the largest
+single stage but no longer on a different order of magnitude than
+decode (33 %). For further encode wins without breaking the
+deny.toml C-purity contract, the realistic levers are quality
+defaults (drop Standard preset to q88 → auto-4:2:0) or progressive
+JPEG (latency-shifts loading but doesn't change total encode time).
+
+### Aggregate (baseline → post-C4 on 24 MP real Z 5 landscape)
+
+| stage | baseline | current | delta |
+| --- | ---: | ---: | ---: |
+| decode | 268 ms | 216 ms | -19 % |
+| frame | 131 ms | 18 ms | **-86 %** |
+| encode q92 | 819 ms | 787 ms | -4 % (noise) |
+| **pipeline default** | **1245 ms** | **1019 ms** | **-18 %** |
+| pipeline SNS (CLI wall-clock) | ~1.5–1.8 s (est) | **~0.47 s** | **~-75 %** |
+
+The default pipeline's remaining wall-clock is dominated by encode q92
+(~77 % of the new total). JPEG entropy coding is fundamentally
+sequential (Huffman state chains across blocks), so further wins on
+that stage need either an encoder swap to one that exposes restart
+markers / parallel chunks, or accepting a quality tradeoff to lower
+the coding cost. Phase D3 (encoder tuning) is the next data-justified
+target if the existing image-crate JpegEncoder API surface allows it.
+

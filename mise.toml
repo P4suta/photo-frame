@@ -21,3 +21,23 @@
 # parity reproducible.
 hyperfine = "latest"
 jq        = "latest"
+
+# Runtime profiling: samply records perf traces and opens them in the
+# Firefox Profiler UI (works locally, no GPU dependency, no
+# system-wide perf permissions needed once unprivileged perf is
+# enabled). `just profile-pipeline FIXTURE` drives it.
+"cargo:samply" = "latest"
+
+# tracing-flame collects span timings; inferno renders the resulting
+# `.folded` file into an SVG flamegraph. Together they give us the
+# span-level latency tree that `tracing` already emits in
+# pipeline.rs / render.rs / decode/lib.rs / encode/lib.rs but had
+# no consumer for.
+"cargo:inferno" = "latest"
+
+# iai-callgrind's runner binary. The library crate
+# `iai-callgrind` (added to photo-frame-bench dev-dependencies)
+# expects this binary on $PATH at the same version. Valgrind
+# itself is a system-package dependency — `apt install valgrind`
+# on Debian/Ubuntu, installed by Dockerfile for the dev image.
+"cargo:iai-callgrind-runner" = "latest"

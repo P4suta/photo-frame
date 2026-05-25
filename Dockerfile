@@ -109,6 +109,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PATH=/usr/local/bin:$PATH
 
 # apt: cache mounts keep the package cache + lists across rebuilds.
+# valgrind is the backend `iai-callgrind-runner` shells out to for the
+# runtime-bench icount harness; without it `just bench-icount` panics
+# at runner startup with a "valgrind not on PATH" diagnostic.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean \
@@ -116,7 +119,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
  && apt-get install -y --no-install-recommends \
         ca-certificates curl git pkg-config libssl-dev build-essential \
         unzip xz-utils \
-        libheif-dev clang
+        libheif-dev clang \
+        valgrind
 
 # bun (Zig-based JS runtime + package manager). Symlinking `node` → `bun`
 # so npm-published packages with `#!/usr/bin/env node` shebangs (lefthook
@@ -128,6 +132,16 @@ RUN curl -fsSL https://bun.sh/install | bash \
 # Rust toolchain components.
 RUN rustup component add clippy rustfmt \
  && rustup target add wasm32-unknown-unknown
+
+# Phase F2 — nightly toolchain for `crates/photo-frame-wasm/` only.
+# rust-toolchain.toml inside that crate pins nightly-2026-04-01; we
+# install it ahead of time so `just wasm-build` doesn't pay the
+# 60-second download on first invocation. rust-src is the std
+# source needed for `-Z build-std`, which `wasm-bindgen-rayon`
+# requires (see crates/photo-frame-wasm/.cargo/config.toml).
+RUN rustup install nightly-2026-04-01 --profile minimal \
+ && rustup component add --toolchain nightly-2026-04-01 rust-src rustfmt clippy \
+ && rustup target  add --toolchain nightly-2026-04-01 wasm32-unknown-unknown
 
 # Cargo tooling: install cargo-binstall once from source, then use it to
 # pull every other tool as a precompiled GitHub-release binary. Drops
@@ -148,7 +162,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
         cargo-deny \
         cargo-nextest \
         hyperfine \
-        cargo-chef
+        cargo-chef \
+        samply \
+        inferno \
+        iai-callgrind-runner
 
 # npm-published tooling.
 RUN bun install -g @biomejs/biome lefthook \

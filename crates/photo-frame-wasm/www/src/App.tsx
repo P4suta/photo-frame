@@ -17,7 +17,12 @@ import {
 } from './frame-client';
 
 const PREVIEW_LONG_EDGE = 1600;
-const PREPARE_DEBOUNCE_MS = 120;
+// Phase G1 dropped the prepare-side debounce entirely: the WASM
+// decoded-photograph cache makes redundant prepares cheap (~50 ms
+// frame stage only), and the Phase G2 prefetch loop already
+// serialises through the Worker queue. `ESTIMATE_DEBOUNCE_MS` stays
+// because quality-slider drag still emits dense ticks that an
+// undebounced encode would chase.
 const ESTIMATE_DEBOUNCE_MS = 220;
 
 const THEMES = [
@@ -58,9 +63,41 @@ type BatchRow = {
 
 type Mode = 'empty' | 'single' | 'batch';
 
+// Phase G2 — pre-render every (theme × layout × showMeta) variant in
+// the background so toggles are signal-swap fast (0 ms WASM round
+// trip). `VariantKey` strings index the cache below; `ALL_VARIANTS`
+// enumerates the 8 combinations so the prefetch loop has a fixed
+// iteration order (deterministic, easier to debug).
+type VariantKey = string;
+const variantKey = (
+  theme: FrameTheme,
+  layout: CaptionLayout,
+  showMeta: boolean,
+): VariantKey => `${theme}|${layout}|${showMeta}`;
+const ALL_VARIANTS: ReadonlyArray<{
+  theme: FrameTheme;
+  layout: CaptionLayout;
+  showMeta: boolean;
+}> = (() => {
+  const out: { theme: FrameTheme; layout: CaptionLayout; showMeta: boolean }[] = [];
+  for (const theme of ['paper', 'ink'] as const) {
+    for (const layout of ['edges', 'centered'] as const) {
+      for (const showMeta of [true, false] as const) {
+        out.push({ theme, layout, showMeta });
+      }
+    }
+  }
+  return out;
+})();
+
 export const App = () => {
   const [single, setSingle] = createSignal<DroppedFile | null>(null);
-  const [previewPixels, setPreviewPixels] = createSignal<PreparedPixels | null>(null);
+  // Phase G2 — keyed by `VariantKey`; entries are populated by the
+  // prepare-then-prefetch effect. `previewPixels` below is the
+  // derived "what to draw right now" memo.
+  const [previewVariants, setPreviewVariants] = createSignal<Map<VariantKey, PreparedPixels>>(
+    new Map(),
+  );
   const [previewSize, setPreviewSize] = createSignal<number | null>(null);
   const [previewElapsedMs, setPreviewElapsedMs] = createSignal<number | null>(null);
   const [batchRows, setBatchRows] = createSignal<BatchRow[]>([]);
@@ -103,6 +140,15 @@ export const App = () => {
     max_long_edge: maxLongEdge,
   });
 
+  // Phase G2 — `currentVariantKey` tracks which (theme, layout,
+  // show_meta) tuple the user is looking at right now;
+  // `previewPixels` is the cached preview for that tuple, or `null`
+  // if the prepare/prefetch effect hasn't filled it yet.
+  const currentVariantKey = createMemo(() => variantKey(theme(), layout(), showMeta()));
+  const previewPixels = createMemo<PreparedPixels | null>(
+    () => previewVariants().get(currentVariantKey()) ?? null,
+  );
+
   const buildPipelineOptions = (maxLongEdge: number | null): PipelineOptions => ({
     ...buildFrameOptions(maxLongEdge),
     jpeg_quality: quality(),
@@ -110,7 +156,7 @@ export const App = () => {
 
   const onDrop = (files: DroppedFile[]): void => {
     revokeAllBatchUrls();
-    setPreviewPixels(null);
+    setPreviewVariants(new Map());
     setPreviewSize(null);
     setPreviewElapsedMs(null);
     setStatus('');
@@ -138,12 +184,26 @@ export const App = () => {
     }
   };
 
-  // ── prepare effect ───────────────────────────────────────────────
-  // Re-runs whenever the photo or any non-quality frame option changes.
-  // Debounced so chained signal updates (preset click changes quality
-  // and resize simultaneously) only fire one WASM call.
-  let prepareTimer: ReturnType<typeof setTimeout> | null = null;
-  let preparePending: { current: DroppedFile; opts: FrameOptionsForPrepare } | null = null;
+  // ── prepare + prefetch effect ────────────────────────────────────
+  //
+  // Phase G2 — every (image, max_long_edge) scope owns its own
+  // `previewVariants` map. When the scope changes we wipe the map and:
+  //
+  //   1. Prepare the *currently displayed* variant first (highest UX
+  //      priority — this is the only one the user actively waits for).
+  //   2. Sequentially prefetch the remaining 7 (theme × layout ×
+  //      show_meta) variants in the background. WASM's Phase G1
+  //      `cached_or_decode` reuses the decoded `Photograph` across
+  //      these calls so each prefetch only pays the frame stage
+  //      (~50–200 ms at preview res), not a full decode.
+  //
+  // `prepareGeneration` invalidates in-flight prefetches when the
+  // user drops a new image or moves the max-long-edge slider — only
+  // the *currently relevant* scope ever writes back into the map.
+  // The Worker serialises requests via `exchange()`'s request-ID
+  // filter, and stale completions are dropped by the generation
+  // check before they touch the signal.
+  let prepareGeneration = 0;
   createEffect(
     on(
       () => {
@@ -151,35 +211,121 @@ export const App = () => {
         if (!current) return null;
         return {
           current,
-          opts: buildFrameOptions(Math.min(PREVIEW_LONG_EDGE, effectiveMaxLongEdge() ?? Infinity)),
+          maxLongEdge: Math.min(PREVIEW_LONG_EDGE, effectiveMaxLongEdge() ?? Infinity),
         };
       },
-      (intent) => {
-        if (!intent) return;
-        preparePending = intent;
-        if (prepareTimer !== null) clearTimeout(prepareTimer);
-        prepareTimer = setTimeout(() => {
-          prepareTimer = null;
-          const pending = preparePending;
-          preparePending = null;
-          if (pending) void runPrepare(pending.current, pending.opts);
-        }, PREPARE_DEBOUNCE_MS);
+      (scope) => {
+        if (!scope) return;
+        prepareGeneration += 1;
+        const gen = prepareGeneration;
+        setPreviewVariants(new Map());
+        const maxLongEdge = scope.maxLongEdge === Number.POSITIVE_INFINITY ? null : scope.maxLongEdge;
+        // Snapshot the user-visible variant at scope-change time —
+        // we prepare this one first so the canvas updates ASAP.
+        const initial = {
+          theme: theme(),
+          layout: layout(),
+          showMeta: showMeta(),
+        };
+        void runPrepareAndPrefetch(scope.current, initial, maxLongEdge, gen);
       },
     ),
   );
 
-  const runPrepare = async (current: DroppedFile, opts: FrameOptionsForPrepare): Promise<void> => {
-    setStatus('Framing preview…');
+  // Phase G2 — if the user toggles theme/layout/show_meta to a
+  // variant the prefetch loop hasn't reached yet, kick off an
+  // out-of-order prepare for it immediately. The prefetch loop
+  // skips variants already in the map (see `runPrepareAndPrefetch`)
+  // so we don't redo work. Wrapped in `defer: true` so this effect
+  // doesn't fire on the initial signal hookup — the scope effect
+  // above already covers that path.
+  createEffect(
+    on(
+      currentVariantKey,
+      (key) => {
+        const current = single();
+        if (!current) return;
+        if (previewVariants().has(key)) return; // already cached
+        const maxLongEdge = effectiveMaxLongEdge();
+        const opts: FrameOptionsForPrepare = {
+          theme: theme(),
+          layout: layout(),
+          show_meta: showMeta(),
+          max_long_edge:
+            maxLongEdge === null
+              ? null
+              : Math.min(PREVIEW_LONG_EDGE, maxLongEdge),
+        };
+        void runPreparePromise(current, opts, key, prepareGeneration);
+      },
+      { defer: true },
+    ),
+  );
+
+  const runPreparePromise = async (
+    current: DroppedFile,
+    opts: FrameOptionsForPrepare,
+    key: VariantKey,
+    gen: number,
+  ): Promise<void> => {
     const started = performance.now();
+    setStatus('Framing preview…');
     try {
       const pixels = await preparePixels(current.data, opts);
-      // Guard against an even-newer file being dropped mid-flight.
-      if (single() !== current) return;
-      setPreviewPixels(pixels);
+      if (gen !== prepareGeneration || single() !== current) return;
+      setPreviewVariants((m) => {
+        const next = new Map(m);
+        next.set(key, pixels);
+        return next;
+      });
       setPreviewElapsedMs(Math.round(performance.now() - started));
       setStatus('');
     } catch (error) {
-      setStatus(`Error: ${stringifyError(error)}`);
+      if (gen === prepareGeneration) setStatus(`Error: ${stringifyError(error)}`);
+    }
+  };
+
+  const runPrepareAndPrefetch = async (
+    current: DroppedFile,
+    initial: { theme: FrameTheme; layout: CaptionLayout; showMeta: boolean },
+    maxLongEdge: number | null,
+    gen: number,
+  ): Promise<void> => {
+    const initialKey = variantKey(initial.theme, initial.layout, initial.showMeta);
+    const initialOpts: FrameOptionsForPrepare = {
+      theme: initial.theme,
+      layout: initial.layout,
+      show_meta: initial.showMeta,
+      max_long_edge: maxLongEdge,
+    };
+    await runPreparePromise(current, initialOpts, initialKey, gen);
+    if (gen !== prepareGeneration) return;
+    // Sequential background prefetch — Worker serialises anyway, and
+    // sequencing means a user-initiated `runPreparePromise` from the
+    // toggle effect above only has at most one prefetch request in
+    // flight ahead of it to wait on (~50–200 ms at preview res).
+    for (const v of ALL_VARIANTS) {
+      if (gen !== prepareGeneration) return;
+      const key = variantKey(v.theme, v.layout, v.showMeta);
+      if (previewVariants().has(key)) continue;
+      const opts: FrameOptionsForPrepare = {
+        theme: v.theme,
+        layout: v.layout,
+        show_meta: v.showMeta,
+        max_long_edge: maxLongEdge,
+      };
+      try {
+        const pixels = await preparePixels(current.data, opts);
+        if (gen !== prepareGeneration) return;
+        setPreviewVariants((m) => {
+          const next = new Map(m);
+          next.set(key, pixels);
+          return next;
+        });
+      } catch {
+        // Prefetch best-effort — silently skip failed variants so a
+        // glitch on one combo doesn't poison the UI status line.
+      }
     }
   };
 
@@ -194,11 +340,25 @@ export const App = () => {
     canvasRef.height = pixels.height;
     const ctx = canvasRef.getContext('2d');
     if (!ctx) return;
-    // ImageData wants Uint8ClampedArray<ArrayBuffer>. Constructing from
-    // the existing Uint8Array copies the bytes into a fresh ArrayBuffer
-    // — keeps TS happy about the SharedArrayBuffer vs ArrayBuffer split
-    // and is the documented shape for ImageData.
-    const view = new Uint8ClampedArray(pixels.rgba);
+    // Phase F3-lite — zero-copy view onto the cached RGBA bytes.
+    // The three-arg `Uint8ClampedArray(buffer, byteOffset, length)`
+    // constructor produces a view (not a copy) so the canvas read
+    // amortises the WASM-returned buffer instead of paying a 24 MB
+    // memcpy per render at 24 MP. Safe because:
+    //  - `pixels.rgba.buffer` is a regular `ArrayBuffer` (the WASM
+    //    `Uint8Array::new_with_length` constructor never returns a
+    //    SharedArrayBuffer), so the ImageData spec accepts it.
+    //  - The cached `pixels` signal outlives the canvas write, so
+    //    the view's storage stays alive.
+    // The `as ArrayBuffer` cast narrows TS's `ArrayBufferLike` to
+    // the concrete type ImageData wants; runtime guard not needed
+    // because the buffer's origin (`Uint8Array::new_with_length`
+    // in `photo-frame-wasm`) never produces SharedArrayBuffer.
+    const view = new Uint8ClampedArray(
+      pixels.rgba.buffer as ArrayBuffer,
+      pixels.rgba.byteOffset,
+      pixels.rgba.byteLength,
+    );
     ctx.putImageData(new ImageData(view, pixels.width, pixels.height), 0, 0);
   });
 
@@ -222,8 +382,15 @@ export const App = () => {
           estimateTimer = null;
           const token = ++estimateToken;
           try {
+            // Phase F3-lite — `encodeJpeg` already does its own
+            // internal `.slice()` before transferring to the worker,
+            // so an extra slice here was a redundant second 24 MB
+            // memcpy per estimate cycle (5× per second during slider
+            // drag). Pass `intent.rgba` directly; the cached
+            // `previewPixels` buffer stays intact because the worker
+            // only ever receives the encodeJpeg-side copy.
             const jpeg = await encodeJpeg(
-              intent.rgba.slice(),
+              intent.rgba,
               intent.width,
               intent.height,
               intent.quality,
@@ -240,8 +407,11 @@ export const App = () => {
   );
 
   onCleanup(() => {
-    if (prepareTimer !== null) clearTimeout(prepareTimer);
     if (estimateTimer !== null) clearTimeout(estimateTimer);
+    // Phase G2 — bumping the generation invalidates any in-flight
+    // prepare/prefetch promises so their completion handlers can't
+    // touch the (about-to-be-disposed) signal.
+    prepareGeneration += 1;
     revokeAllBatchUrls();
     disposeWorker();
   });
@@ -256,7 +426,12 @@ export const App = () => {
     const started = performance.now();
     try {
       const full = await preparePixels(current.data, buildFrameOptions(effectiveMaxLongEdge()));
-      const jpeg = await encodeJpeg(full.rgba.slice(), full.width, full.height, quality());
+      // Phase F3-lite — `encodeJpeg` slices internally before
+      // worker transfer; a second slice here was redundant. `full`
+      // is consumed immediately after so the cache argument doesn't
+      // apply, but symmetry with the estimate path above keeps the
+      // call-shape consistent.
+      const jpeg = await encodeJpeg(full.rgba, full.width, full.height, quality());
       const blob = new Blob([uint8ToBuffer(jpeg)], { type: 'image/jpeg' });
       triggerDownload(blob, framedName(current.name));
       setStatus(`Saved in ${Math.round(performance.now() - started)} ms`);

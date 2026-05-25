@@ -94,6 +94,16 @@ struct Cli {
     ///   CI / log-aggregator friendly
     #[arg(long, value_enum)]
     log_format: Option<LogFormat>,
+
+    /// Write per-span timings to PATH as a flamegraph-compatible
+    /// `.folded` file. Run `inferno-flamegraph < PATH > flame.svg`
+    /// to render the result, or use `just profile-trace <fixture>`
+    /// which wraps both steps. Requires the binary to be built with
+    /// `--features trace`; off by default because the per-span IO
+    /// overhead would otherwise leak into the runtime numbers.
+    #[cfg(feature = "trace")]
+    #[arg(long, value_name = "PATH")]
+    profile_trace: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -203,14 +213,47 @@ impl Categorize for CliIoError {
     }
 }
 
+// Heap profiling via dhat-rs. Active only behind the `dhat` cargo
+// feature so the global allocator swap and per-allocation tracking
+// stay out of production builds. When enabled, `dhat-heap.json`
+// lands in the CWD on exit; load it at https://nnethercote.com/dh_view/
+// for the call-tree breakdown Phase B's report references.
+#[cfg(feature = "dhat")]
+#[global_allocator]
+static DHAT_ALLOC: dhat::Alloc = dhat::Alloc;
+
 fn main() -> ExitCode {
+    #[cfg(feature = "dhat")]
+    let _dhat_profiler = dhat::Profiler::new_heap();
+
     install_panic_hook();
     let cli = Cli::parse();
-    init_tracing(
-        cli.verbose,
-        cli.quiet,
-        cli.log_format.unwrap_or(LogFormat::Pretty),
-    );
+
+    // `--profile-trace=PATH` (trace feature only) installs the
+    // `tracing-flame` subscriber that writes span enter/exit
+    // timings to PATH. The guard must outlive every emitted span,
+    // so we bind it in `main` and let RAII flush at process exit.
+    // When the flag is set we *skip* the default pretty/compact/json
+    // logger because both target the global subscriber slot —
+    // `tracing` allows exactly one. Without the flag, the normal
+    // logger initialises as usual.
+    #[cfg(feature = "trace")]
+    let flame_guard = cli.profile_trace.as_deref().map(|path| {
+        photo_frame::trace::flame_guard(path)
+            .unwrap_or_else(|e| panic!("--profile-trace=`{}`: {e}", path.display()))
+    });
+    #[cfg(feature = "trace")]
+    let install_default_logger = flame_guard.is_none();
+    #[cfg(not(feature = "trace"))]
+    let install_default_logger = true;
+
+    if install_default_logger {
+        init_tracing(
+            cli.verbose,
+            cli.quiet,
+            cli.log_format.unwrap_or(LogFormat::Pretty),
+        );
+    }
 
     match run(&cli) {
         Ok(code) => code,
