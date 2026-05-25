@@ -38,6 +38,7 @@ type Props = {
   onDownload: (row: GalleryRow) => void;
 };
 
+// Footer status label — short caption shown under the thumbnail.
 const statusLabel = (status: GalleryRow['status']): string => {
   switch (status) {
     case 'queued':
@@ -51,46 +52,55 @@ const statusLabel = (status: GalleryRow['status']): string => {
   }
 };
 
+// Button-face label — shown on the card-button itself. Reads as
+// an action when the row's ready, as a status while it works.
+const buttonLabel = (status: GalleryRow['status']): string => {
+  switch (status) {
+    case 'queued':
+      return 'Queued…';
+    case 'processing':
+      return 'Processing…';
+    case 'done':
+      return 'Download';
+    case 'error':
+      return 'Failed';
+  }
+};
+
 export const Gallery = (props: Props): JSX.Element => (
   <ul class={gallery}>
     <For each={props.rows}>
       {(row) => {
-        // Shared card body — the thumbnail block + filename + footer.
-        const body = (
-          <>
-            <div class={`${galleryThumb} gallery-thumb`}>
-              {row.thumbnailUrl ? (
-                <img class={galleryThumbImg} src={row.thumbnailUrl} alt="" />
-              ) : (
-                <div class={galleryThumbPlaceholder} />
-              )}
-            </div>
-            <div class={galleryName} title={row.name}>
-              {row.name}
-            </div>
-            <div class={galleryFooter}>
-              <span class={galleryStatus}>{statusLabel(row.status)}</span>
-            </div>
-          </>
-        );
-
-        // Once the row is `done`, the whole card becomes a single
-        // button — easier touch target than a small Save button
-        // tucked in the footer. Until then it's a passive <li>.
+        // The whole card is always a button — disabled until the
+        // background processing completes, label flips from
+        // "Processing…" to "Download" the moment the row's ready.
+        // This gives the user a single, predictable target whose
+        // affordance state advertises the row's progress.
+        const ready = (): boolean => row.status === 'done';
         return (
           <li class={`${galleryCard} ${galleryCardStatus}`} data-status={row.status}>
-            {row.status === 'done' ? (
-              <button
-                type="button"
-                class={galleryCardButton}
-                onClick={() => props.onDownload(row)}
-                title={`Download ${row.name}`}
-              >
-                {body}
-              </button>
-            ) : (
-              body
-            )}
+            <button
+              type="button"
+              class={galleryCardButton}
+              disabled={!ready()}
+              onClick={() => ready() && props.onDownload(row)}
+              title={ready() ? `Download ${row.name}` : `${buttonLabel(row.status)} — ${row.name}`}
+            >
+              <div class={`${galleryThumb} gallery-thumb`}>
+                {row.thumbnailUrl ? (
+                  <img class={galleryThumbImg} src={row.thumbnailUrl} alt="" />
+                ) : (
+                  <div class={galleryThumbPlaceholder} />
+                )}
+              </div>
+              <div class={galleryName} title={row.name}>
+                {row.name}
+              </div>
+              <div class={galleryFooter}>
+                <span class={galleryStatus}>{statusLabel(row.status)}</span>
+                <span class={galleryStatus}>{buttonLabel(row.status)}</span>
+              </div>
+            </button>
           </li>
         );
       }}

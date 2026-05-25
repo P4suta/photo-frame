@@ -142,10 +142,16 @@ export const galleryCardButton = css({
   padding: '0',
   width: 'full',
   // Hover affordance — a subtle opacity drop on the card,
-  // monochrome, no bg shift.
+  // monochrome, no bg shift. Suppressed while the row is still
+  // processing (button is disabled there) so the card doesn't
+  // imply clickability before the result is ready.
   transition: '[opacity 120ms ease]',
   _hover: {
     opacity: 0.75,
+  },
+  _disabled: {
+    cursor: 'default',
+    _hover: { opacity: 1 },
   },
   _focusVisible: {
     outline: '[2px solid {colors.fg.default}]',

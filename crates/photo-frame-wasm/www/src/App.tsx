@@ -115,9 +115,13 @@ type BatchRow = {
   message?: string;
 };
 
-// Thumbnail long-edge cap — small enough to render quickly, large
-// enough to read the framing geometry on a `phi.6`-min-width card.
-const THUMBNAIL_LONG_EDGE = 320;
+// Thumbnail long-edge cap — fitted to the gallery card thumb
+// area (≈ 287 × 177 px after the φ-portrait split), so a 160 px
+// long-edge thumbnail letterboxes in cleanly. Both the WASM
+// downscale and the frame composition (text render, border
+// stroke) scale with this number; halving the long edge roughly
+// quarters the per-thumb cost.
+const THUMBNAIL_LONG_EDGE = 160;
 // Debounce window for thumbnail regeneration on theme/layout/
 // show_meta toggles. Mirrors `ESTIMATE_DEBOUNCE_MS` rationale —
 // the user often drags through preset states before settling.
@@ -161,7 +165,6 @@ export const App = () => {
   const [previewElapsedMs, setPreviewElapsedMs] = createSignal<number | null>(null);
   const [batchRows, setBatchRows] = createSignal<BatchRow[]>([]);
   const [batchFiles, setBatchFiles] = createSignal<DroppedFile[] | null>(null);
-  const [batchBusy, setBatchBusy] = createSignal(false);
   const [preset, setPreset] = createSignal<PresetKey>('standard');
   const [quality, setQuality] = createSignal<number>(PRESETS.standard.quality);
   const [resize, setResize] = createSignal(false);
@@ -637,13 +640,33 @@ export const App = () => {
   };
 
   // ── batch run ────────────────────────────────────────────────────
+  //
+  // Runs eagerly in the background as soon as `batchFiles` is set
+  // and re-runs (debounced) whenever any render-affecting signal
+  // changes. The generation counter + handler-detach guarantee
+  // that stale `done` replies from a superseded run can't write
+  // into the new batch's rows. The user never has to click a
+  // "Process" button — by the time they reach the download
+  // affordance, the resultUrl is already populated.
+  let batchProcessGeneration = 0;
+  let batchProcessHandler: ((event: MessageEvent<WorkerReply>) => void) | null = null;
+  const detachBatchProcessHandler = (): void => {
+    if (batchProcessHandler === null) return;
+    getWorker().removeEventListener('message', batchProcessHandler);
+    batchProcessHandler = null;
+  };
   const onProcessBatch = (): void => {
     const files = batchFiles();
-    if (!files || batchBusy()) return;
-    setBatchBusy(true);
+    if (!files) return;
+    batchProcessGeneration += 1;
+    const gen = batchProcessGeneration;
+    // Detach the previous run's listener so it can't race into
+    // the new generation's row state.
+    detachBatchProcessHandler();
     setStatus(`Processing ${files.length} files in the background…`);
     const w = getWorker();
     const handle = (event: MessageEvent<WorkerReply>): void => {
+      if (gen !== batchProcessGeneration) return;
       const msg = event.data;
       if (msg.kind === 'progress') {
         setBatchRows((rows) =>
@@ -651,19 +674,18 @@ export const App = () => {
         );
       } else if (msg.kind === 'done') {
         applyBatchResults(msg.results);
-        setBatchBusy(false);
         const ok = msg.results.filter((r) => r.ok).length;
         setStatus(`Batch done: ${ok}/${msg.results.length} succeeded.`);
-        w.removeEventListener('message', handle);
+        detachBatchProcessHandler();
       } else if (msg.kind === 'error' && msg.requestId === null) {
         setStatus(`Batch failed: ${msg.message}`);
         setBatchRows((rows) => rows.map((r) => ({ ...r, status: 'error', message: msg.message })));
-        setBatchBusy(false);
-        w.removeEventListener('message', handle);
+        detachBatchProcessHandler();
       }
       // Other replies (prepared/encoded/non-batch error) belong to other
       // requesters and are ignored here.
     };
+    batchProcessHandler = handle;
     w.addEventListener('message', handle);
     const items: BatchItem[] = files.map((f) => ({ key: f.name, bytes: f.data }));
     const request: WorkerRequest = {
@@ -673,6 +695,36 @@ export const App = () => {
     };
     w.postMessage(request);
   };
+
+  // Auto-trigger background batch processing whenever the file
+  // set or any render-affecting setting changes, debounced so a
+  // theme/quality drag doesn't kick off a new full pass per tick.
+  const BATCH_PROCESS_DEBOUNCE_MS = 320;
+  let batchProcessDebounce: ReturnType<typeof setTimeout> | null = null;
+  createEffect(
+    on(
+      () => {
+        const files = batchFiles();
+        if (!files) return null;
+        return {
+          files,
+          theme: theme(),
+          layout: layout(),
+          showMeta: showMeta(),
+          quality: quality(),
+          maxLongEdge: effectiveMaxLongEdge(),
+        };
+      },
+      (scope) => {
+        if (batchProcessDebounce !== null) clearTimeout(batchProcessDebounce);
+        if (!scope) return;
+        batchProcessDebounce = setTimeout(() => {
+          batchProcessDebounce = null;
+          onProcessBatch();
+        }, BATCH_PROCESS_DEBOUNCE_MS);
+      },
+    ),
+  );
 
   const applyBatchResults = (results: BatchResult[]): void => {
     setBatchRows((rows) =>
@@ -787,16 +839,11 @@ export const App = () => {
             </button>
           </Show>
 
-          <Show when={mode() === 'batch'}>
-            <button
-              type="button"
-              class={button({ intent: 'primary' })}
-              disabled={batchBusy()}
-              onClick={onProcessBatch}
-            >
-              {batchBusy() ? 'Processing…' : `Process ${batchRows().length} files`}
-            </button>
-          </Show>
+          {/* Batch mode no longer needs a "Process N files"
+              button — processing kicks off automatically on
+              drop / setting change, and the gallery card
+              buttons flip from disabled to enabled the moment
+              each row's encode completes. */}
 
           <footer class={sidebarFooter}>
             <a href="https://github.com/P4suta/photo-frame">Source</a> ·{' '}
