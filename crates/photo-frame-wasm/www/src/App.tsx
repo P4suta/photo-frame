@@ -1,4 +1,13 @@
-import { createEffect, createMemo, createSignal, For, on, onCleanup, Show } from 'solid-js';
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  on,
+  onCleanup,
+  onMount,
+  Show,
+} from 'solid-js';
 import { appShell, button, segmentedButton } from '../styled-system/recipes';
 import {
   appHeader,
@@ -48,6 +57,16 @@ import {
 import { Gallery } from './Gallery';
 import { GoldenSpiral } from './GoldenSpiral';
 import { GoldenSpiralInward } from './GoldenSpiralInward';
+
+// Dev-only swap: flip this constant to compare the inward
+// (`'inward'`) variant against the default outward pencil
+// without rebuilding any URLs or routes. Keep `'outward'` on
+// `main`; the inward sibling stays in the tree as a side-by-
+// side reference while the animation language is being tuned.
+// The `as` keeps both branches type-reachable — without it TS
+// narrows to the literal and the conditional reads as dead.
+type SpiralKind = 'outward' | 'inward';
+const SPIRAL_KIND = 'outward' as SpiralKind;
 
 const PREVIEW_LONG_EDGE = 1600;
 // Phase G1 dropped the prepare-side debounce entirely: the WASM
@@ -384,36 +403,72 @@ export const App = () => {
   };
 
   // ── draw effect ──────────────────────────────────────────────────
-  // Paints the cached RGBA onto the canvas. Cheap; runs synchronously
-  // whenever previewPixels updates.
+  // Paints the cached RGBA into a container-sized drawing buffer
+  // with `object-fit: contain` semantics. We deliberately do NOT
+  // set the canvas's intrinsic size to the image's pixel
+  // dimensions — doing so would make the <canvas> element's
+  // intrinsic aspect ratio override `object-fit: contain` and
+  // crop portrait images vertically inside a wider container.
+  // Instead the drawing buffer matches the container × DPR and
+  // the image is centred + scaled to fit inside it.
   let canvasRef: HTMLCanvasElement | undefined;
-  createEffect(() => {
+
+  const paintPreview = (canvas: HTMLCanvasElement): void => {
     const pixels = previewPixels();
-    if (!pixels || !canvasRef) return;
-    canvasRef.width = pixels.width;
-    canvasRef.height = pixels.height;
-    const ctx = canvasRef.getContext('2d');
+    if (!pixels) return;
+    const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    // Phase F3-lite — zero-copy view onto the cached RGBA bytes.
-    // The three-arg `Uint8ClampedArray(buffer, byteOffset, length)`
-    // constructor produces a view (not a copy) so the canvas read
-    // amortises the WASM-returned buffer instead of paying a 24 MB
-    // memcpy per render at 24 MP. Safe because:
-    //  - `pixels.rgba.buffer` is a regular `ArrayBuffer` (the WASM
-    //    `Uint8Array::new_with_length` constructor never returns a
-    //    SharedArrayBuffer), so the ImageData spec accepts it.
-    //  - The cached `pixels` signal outlives the canvas write, so
-    //    the view's storage stays alive.
-    // The `as ArrayBuffer` cast narrows TS's `ArrayBufferLike` to
-    // the concrete type ImageData wants; runtime guard not needed
-    // because the buffer's origin (`Uint8Array::new_with_length`
-    // in `photo-frame-wasm`) never produces SharedArrayBuffer.
+    const cssW = canvas.clientWidth;
+    const cssH = canvas.clientHeight;
+    if (cssW === 0 || cssH === 0) return;
+    const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+    canvas.width = Math.round(cssW * dpr);
+    canvas.height = Math.round(cssH * dpr);
+    // Author in CSS pixels — the DPR ride is on the transform so
+    // the contain-fit maths below works in container units.
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssH);
+
+    // Phase F3-lite — zero-copy view onto the cached RGBA bytes
+    // (the WASM-returned `Uint8Array::new_with_length` buffer is
+    // a regular ArrayBuffer, never SharedArrayBuffer, so the
+    // ImageData spec accepts it without a memcpy).
     const view = new Uint8ClampedArray(
       pixels.rgba.buffer as ArrayBuffer,
       pixels.rgba.byteOffset,
       pixels.rgba.byteLength,
     );
-    ctx.putImageData(new ImageData(view, pixels.width, pixels.height), 0, 0);
+    // Stage the RGBA into an offscreen canvas so `drawImage` can
+    // letterbox it. `putImageData` doesn't honour destination
+    // rectangles, so going through an offscreen is the minimal
+    // way to compose put + scale in one pipeline.
+    const off = document.createElement('canvas');
+    off.width = pixels.width;
+    off.height = pixels.height;
+    const offCtx = off.getContext('2d');
+    if (!offCtx) return;
+    offCtx.putImageData(new ImageData(view, pixels.width, pixels.height), 0, 0);
+
+    const scale = Math.min(cssW / pixels.width, cssH / pixels.height);
+    const dw = pixels.width * scale;
+    const dh = pixels.height * scale;
+    const dx = (cssW - dw) / 2;
+    const dy = (cssH - dh) / 2;
+    ctx.drawImage(off, dx, dy, dw, dh);
+  };
+
+  createEffect(() => {
+    // Subscribe to previewPixels (re-paints when it changes).
+    previewPixels();
+    if (canvasRef) paintPreview(canvasRef);
+  });
+
+  onMount(() => {
+    if (!canvasRef) return;
+    const canvas = canvasRef;
+    const ro = new ResizeObserver(() => paintPreview(canvas));
+    ro.observe(canvas);
+    onCleanup(() => ro.disconnect());
   });
 
   // ── estimate effect ──────────────────────────────────────────────
@@ -673,8 +728,7 @@ export const App = () => {
       <main class={stage}>
         <Show when={mode() === 'empty'}>
           <div class={stageEmpty}>
-            <GoldenSpiral />
-            <GoldenSpiralInward />
+            {SPIRAL_KIND === 'inward' ? <GoldenSpiralInward /> : <GoldenSpiral />}
             <DropZone onLoad={onDrop} />
           </div>
         </Show>

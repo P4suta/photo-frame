@@ -144,12 +144,12 @@ export const stageBatch = css(stageInnerBase, {
 export const previewCanvas = css({
   width: 'full',
   height: 'full',
-  // `aspect-ratio: auto` is the CSS default but must be stated
-  // explicitly to override the canvas element's intrinsic ratio
-  // derived from its `width=`/`height=` HTML attrs. The escape
-  // hatch flags this as a CSS-keyword reset, not a design token.
-  aspectRatio: '[auto]',
-  objectFit: 'contain',
+  // The contain-fit is done in `paintPreview` (App.tsx): the
+  // drawing buffer matches the container × DPR and the image is
+  // letterboxed inside it. The canvas element itself has no
+  // intrinsic ratio that could fight CSS layout — so no
+  // `aspect-ratio` or `object-fit` are needed (or wanted; the
+  // latter would only ever apply *inside* the drawing buffer).
   border: 'soft',
   borderRadius: 'phi.m3',
   imageRendering: 'auto',

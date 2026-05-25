@@ -84,6 +84,17 @@ const RTARGET_RATIO = 0.42;
 const STATIC_TH = TH0 + OMEGA * 6;
 
 const TWO_PI = Math.PI * 2;
+const HALF_PI = Math.PI / 2;
+
+// Vertex ripple — every rectangle corner sits on the spiral at
+// θ = n·π/2, so a small ring rendered when the pencil tip
+// crosses one of those θ values lands exactly on the corner
+// without any extra geometry lookup. Lifetime is far shorter
+// than the 2π wrap (9 s) so the φ⁴ self-similar reset never
+// catches a ripple mid-life.
+const RIPPLE_LIFETIME_MS = 700;
+const RIPPLE_MAX_R_PX = 12;
+const RIPPLE_STROKE_PX = 1;
 
 const wrapperCss = css({
   position: 'absolute',
@@ -146,6 +157,16 @@ export const GoldenSpiral = (): JSX.Element => {
     let last: number | null = null;
     let tAcc = 0;
 
+    // Active vertex ripples and the previous frame's pencil θ
+    // for crossing detection. `thetaSpiral` is the pole-frame θ
+    // (= n · π/2) so its on-canvas position rides the scale
+    // shrink along with the rest of the spiral — the ripple
+    // appears at the corner and drifts inward with the rest of
+    // the imagery, never floating off as a screen-fixed artifact.
+    type Ripple = { thetaSpiral: number; t0: number };
+    const ripples: Ripple[] = [];
+    let prevThTip: number | null = null;
+
     const readColors = (): void => {
       strokeDim = getComputedStyle(canvas).color;
       strokeFaint = getComputedStyle(probe).color;
@@ -171,7 +192,22 @@ export const GoldenSpiral = (): JSX.Element => {
       baseScale = Rtarget / RHO0;
     };
 
-    const drawAt = (thTip: number): void => {
+    const drawAt = (thTip: number, now: number): void => {
+      // Vertex crossing detection — every n·π/2 the pencil
+      // sweeps past is a corner contact. Push one ripple per
+      // crossing into the active list; the list is drained
+      // below as each ripple ages out. `prevThTip` is null on
+      // the first frame (and after a reduced-motion pause/
+      // resume) so we skip detection until we have a baseline.
+      if (prevThTip !== null && thTip > prevThTip) {
+        const nStart = Math.floor(prevThTip / HALF_PI) + 1;
+        const nEnd = Math.floor(thTip / HALF_PI);
+        for (let n = nStart; n <= nEnd; n++) {
+          ripples.push({ thetaSpiral: n * HALF_PI, t0: now });
+        }
+      }
+      prevThTip = thTip;
+
       // Wrap θ by 2π only after we leave the intro phase (thTip
       // negative). The φ⁴-self-similarity makes the wrap
       // visually continuous.
@@ -245,6 +281,29 @@ export const GoldenSpiral = (): JSX.Element => {
       ctx.beginPath();
       ctx.arc(mx(pt), my(pt), TIP_DOT_R_PX, 0, TWO_PI);
       ctx.fill();
+
+      // Vertex ripples — circular blips at the corners the
+      // pencil has just passed. Each ripple grows from 0 →
+      // RIPPLE_MAX_R_PX and fades 1 → 0 over its lifetime,
+      // pinned to its corner in spiral coordinates so it
+      // drifts inward with the rest of the imagery.
+      ctx.strokeStyle = strokeDim;
+      ctx.lineWidth = RIPPLE_STROKE_PX;
+      for (let i = ripples.length - 1; i >= 0; i--) {
+        const r = ripples[i];
+        if (!r) continue;
+        const age = (now - r.t0) / RIPPLE_LIFETIME_MS;
+        if (age >= 1) {
+          ripples.splice(i, 1);
+          continue;
+        }
+        const p = logSpiralPoint(r.thetaSpiral);
+        ctx.globalAlpha = 1 - age;
+        ctx.beginPath();
+        ctx.arc(mx(p), my(p), age * RIPPLE_MAX_R_PX, 0, TWO_PI);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
     };
 
     const drawFrame = (now: number): void => {
@@ -252,12 +311,18 @@ export const GoldenSpiral = (): JSX.Element => {
       const dt = now - last;
       last = now;
       tAcc += dt;
-      drawAt(TH0 + OMEGA * (tAcc / 1000));
+      drawAt(TH0 + OMEGA * (tAcc / 1000), now);
       rafId = requestAnimationFrame(drawFrame);
     };
 
     const drawStatic = (): void => {
-      drawAt(STATIC_TH);
+      // Reset the crossing baseline so a static repaint at a
+      // different θ doesn't dump a burst of ripples into the
+      // queue (which would then visibly fade in over the static
+      // frame and contradict the "no motion" contract).
+      prevThTip = STATIC_TH;
+      ripples.length = 0;
+      drawAt(STATIC_TH, performance.now());
     };
 
     const ro = new ResizeObserver(() => {
