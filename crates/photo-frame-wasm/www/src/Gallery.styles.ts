@@ -6,13 +6,15 @@ import { css } from '../styled-system/css';
 // This produces the dense, mixed-orientation tile look that reads
 // as a "photo set" rather than a uniform grid of φ-portraits.
 //
-// `column-width: phi.6` picks the column count automatically:
-// browsers honour it as "make as many columns as fit, each at
-// least this wide". `break-inside: avoid` on each card keeps a
-// row's thumbnail + metadata together when CSS column-balances.
+// `column-width: phi.5` (~178 px) picks the column count
+// automatically: browsers honour it as "make as many columns
+// as fit, each at least this wide". On a 720 px stage that's
+// 3-4 columns; on a 1200 px stage 5-6. `break-inside: avoid`
+// on each card keeps a row's thumbnail + metadata together
+// when CSS column-balances.
 export const gallery = css({
   columnCount: '[auto]',
-  columnWidth: 'phi.6',
+  columnWidth: 'phi.5',
   columnGap: 'phi.m1',
   width: 'full',
   maxHeight: 'full',

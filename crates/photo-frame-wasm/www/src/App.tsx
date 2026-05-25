@@ -116,13 +116,13 @@ type BatchRow = {
   message?: string;
 };
 
-// Thumbnail long-edge cap — fitted to the gallery card thumb
-// area (≈ 287 × 177 px after the φ-portrait split), so a 160 px
-// long-edge thumbnail letterboxes in cleanly. Both the WASM
-// downscale and the frame composition (text render, border
-// stroke) scale with this number; halving the long edge roughly
-// quarters the per-thumb cost.
-const THUMBNAIL_LONG_EDGE = 160;
+// Thumbnail long-edge cap — sized for the masonry layout's
+// column width times a comfortable DPR. Cards span `phi.5`
+// (~178 px) per column at the widest viewport, and a 2× DPR
+// pass through that demands ~360 px. 480 keeps the thumb sharp
+// on retina-class displays without paying for full-resolution
+// frame composition.
+const THUMBNAIL_LONG_EDGE = 480;
 // Debounce window for thumbnail regeneration on theme/layout/
 // show_meta toggles. Mirrors `ESTIMATE_DEBOUNCE_MS` rationale —
 // the user often drags through preset states before settling.
