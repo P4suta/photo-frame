@@ -20,6 +20,18 @@ permissions:
   contents: read
   pull-requests: write
 
+# `dtolnay/rust-toolchain` auto-exports CARGO_TERM_COLOR=always when the
+# variable is unset. That is convenient for the Actions log (renders the
+# colour) but the `divan` job below captures cargo's stderr into a file
+# and pastes it into a sticky PR comment — markdown does not render ANSI
+# escape sequences, so the raw bytes show up as
+# `^[[1m^[[92m   Updating^[[0m crates.io index`. Pre-setting the variable
+# here at the workflow scope wins the conditional and keeps cargo's
+# output plain everywhere this workflow runs cargo, both in the log and
+# in the comment.
+env:
+  CARGO_TERM_COLOR: never
+
 concurrency:
   group: runtime-bench-${{ github.ref }}
   cancel-in-progress: true
