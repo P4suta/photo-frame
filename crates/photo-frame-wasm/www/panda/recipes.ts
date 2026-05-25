@@ -79,6 +79,14 @@ const button = defineRecipe({
 // this recipe is just the per-button look + active state.
 const segmentedButton = defineRecipe({
   className: 'segmentedBtn',
+  // The renderer calls `segmentedButton({ active: x === current })`
+  // — a dynamic boolean Panda's static extractor cannot resolve at
+  // build time. Without `staticCss` only the `active: false` (=
+  // default) variant gets emitted, and the selected button reads
+  // identically to the unselected ones. Emitting both variants
+  // unconditionally is a one-line cost in CSS size and guarantees
+  // the active class is always there to win the cascade.
+  staticCss: [{ active: [true, false] }],
   base: {
     margin: '0',
     paddingX: 'phi.m1',
