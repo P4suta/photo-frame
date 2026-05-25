@@ -12,7 +12,6 @@ import { appShell, button, segmentedButton } from '../styled-system/recipes';
 import {
   appHeader,
   brand,
-  checkInline,
   controls,
   field,
   fieldBody,
@@ -24,7 +23,6 @@ import {
   meterValue,
   previewCanvas,
   previewFrame,
-  resizeRow,
   segmented,
   sidebar,
   sidebarFooter,
@@ -32,7 +30,6 @@ import {
   stageBatch,
   stageCanvas,
   stageEmpty,
-  suffix,
   tagline,
   wordmark,
 } from './App.styles';
@@ -97,12 +94,31 @@ const CAPTION_MODES = [
  * round-trip for every preset click.
  */
 const PRESETS = {
-  sns: { label: 'SNS', quality: 78, maxLongEdge: 2048 as number | null },
+  sns: { label: 'SNS', quality: 78, maxLongEdge: 1920 as number | null },
   standard: { label: 'Standard', quality: 92, maxLongEdge: null as number | null },
   maximum: { label: 'Maximum', quality: 98, maxLongEdge: null as number | null },
 } as const satisfies Record<string, { label: string; quality: number; maxLongEdge: number | null }>;
 
 type PresetKey = keyof typeof PRESETS;
+
+// Long-edge size options the user can choose from. The dial-a-
+// number resize control was replaced with this segmented picker
+// because the precision wasn't doing anyone any favours — a
+// handful of recognisable display targets ("FHD", "4K", "Full")
+// communicates the intent far better than a 1-20000 px text box.
+// Source images smaller than the chosen cap are emitted at their
+// native size unchanged (WASM `max_long_edge` is a ceiling, not
+// a floor); a future iteration can grey out options the source
+// can't reach, but for now the worst case is "Full and FHD look
+// identical" — not a correctness bug.
+const LONG_EDGE_OPTIONS = {
+  full: { label: 'Full', maxLongEdge: null as number | null },
+  '4k': { label: '4K', maxLongEdge: 3840 as number | null },
+  fhd: { label: 'FHD', maxLongEdge: 1920 as number | null },
+  hd: { label: 'HD', maxLongEdge: 1280 as number | null },
+} as const satisfies Record<string, { label: string; maxLongEdge: number | null }>;
+
+type LongEdgeKey = keyof typeof LONG_EDGE_OPTIONS;
 
 // Row state for the batch gallery. `thumbnailUrl` is the small
 // framed preview shown while the row sits queued / processing;
@@ -169,8 +185,7 @@ export const App = () => {
   const [batchFiles, setBatchFiles] = createSignal<DroppedFile[] | null>(null);
   const [preset, setPreset] = createSignal<PresetKey>('standard');
   const [quality, setQuality] = createSignal<number>(PRESETS.standard.quality);
-  const [resize, setResize] = createSignal(false);
-  const [resizePx, setResizePx] = createSignal<number>(2048);
+  const [longEdge, setLongEdge] = createSignal<LongEdgeKey>('full');
   const [theme, setTheme] = createSignal<FrameTheme>('paper');
   const [layout, setLayout] = createSignal<CaptionLayout>('edges');
   const [showMeta, setShowMeta] = createSignal(true);
@@ -181,20 +196,27 @@ export const App = () => {
     batchFiles() !== null ? 'batch' : single() !== null ? 'single' : 'empty',
   );
 
+  // Map a preset's numeric `maxLongEdge` onto the closest
+  // `LongEdgeKey` so the segmented control above the preset
+  // can stay in sync. Equality is fine here because the
+  // preset values were intentionally aligned to the
+  // LONG_EDGE_OPTIONS table.
+  const longEdgeKeyFor = (maxLongEdge: number | null): LongEdgeKey => {
+    for (const [key, info] of Object.entries(LONG_EDGE_OPTIONS)) {
+      if (info.maxLongEdge === maxLongEdge) return key as LongEdgeKey;
+    }
+    return 'full';
+  };
+
   const applyPreset = (key: PresetKey): void => {
     setPreset(key);
     const p = PRESETS[key];
     setQuality(p.quality);
-    if (p.maxLongEdge === null) {
-      setResize(false);
-    } else {
-      setResize(true);
-      setResizePx(p.maxLongEdge);
-    }
+    setLongEdge(longEdgeKeyFor(p.maxLongEdge));
   };
 
-  const effectiveMaxLongEdge = createMemo<number | null>(() =>
-    resize() ? Math.max(1, resizePx()) : null,
+  const effectiveMaxLongEdge = createMemo<number | null>(
+    () => LONG_EDGE_OPTIONS[longEdge()].maxLongEdge,
   );
 
   const buildFrameOptions = (maxLongEdge: number | null): FrameOptionsForPrepare => ({
@@ -836,10 +858,8 @@ export const App = () => {
           <ControlsCommon
             preset={preset()}
             onPreset={applyPreset}
-            resize={resize()}
-            onResize={setResize}
-            resizePx={resizePx()}
-            onResizePx={setResizePx}
+            longEdge={longEdge()}
+            onLongEdge={setLongEdge}
             theme={theme()}
             onTheme={setTheme}
             layout={layout()}
@@ -901,10 +921,8 @@ export const App = () => {
 type ControlsProps = {
   preset: PresetKey;
   onPreset: (k: PresetKey) => void;
-  resize: boolean;
-  onResize: (v: boolean) => void;
-  resizePx: number;
-  onResizePx: (n: number) => void;
+  longEdge: LongEdgeKey;
+  onLongEdge: (k: LongEdgeKey) => void;
   theme: FrameTheme;
   onTheme: (t: FrameTheme) => void;
   layout: CaptionLayout;
@@ -937,26 +955,19 @@ const ControlsCommon = (props: ControlsProps) => (
     </Field>
 
     <Field label="Long edge">
-      <div class={resizeRow}>
-        <label class={checkInline}>
-          <input
-            type="checkbox"
-            checked={props.resize}
-            onChange={(event) => props.onResize(event.currentTarget.checked)}
-          />
-          <span>Cap at</span>
-        </label>
-        <input
-          type="number"
-          min={1}
-          max={20000}
-          step={1}
-          value={props.resizePx}
-          disabled={!props.resize}
-          onInput={(event) => props.onResizePx(Number(event.currentTarget.value) || 1)}
-        />
-        <span class={suffix}>px</span>
-      </div>
+      <Segmented
+        options={Object.entries(LONG_EDGE_OPTIONS).map(([key, info]) => ({
+          value: key as LongEdgeKey,
+          label: info.label,
+          title:
+            info.maxLongEdge === null
+              ? 'Source size unchanged'
+              : `Cap at ${info.maxLongEdge} px on the long edge`,
+        }))}
+        value={props.longEdge}
+        onChange={props.onLongEdge}
+        ariaLabel="Maximum image size"
+      />
     </Field>
 
     <Field label="Background color">
