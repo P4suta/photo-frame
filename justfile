@@ -70,8 +70,20 @@ test:
 # because `wasm-bindgen-rayon` requires `target-feature=+atomics`,
 # which only works with `-Z build-std` (nightly only). All other
 # `just` recipes inherit the host pin unchanged.
+#
+# `CARGO_UNSTABLE_BUILD_STD` belt-and-braces: the same flag lives
+# in `crates/photo-frame-wasm/.cargo/config.toml` as `[unstable]
+# build-std = [...]`, which works locally but is silently ignored
+# on CI runners (suspected interaction with how `rust-toolchain.toml`
+# + `rustup default` propagate the nightly selection through
+# `wasm-pack`'s cargo invocation). Setting the env var bypasses the
+# config-file resolution entirely; nightly cargo honours it
+# unconditionally, std gets rebuilt with the per-crate
+# `target-feature=+atomics,+bulk-memory,+mutable-globals,+simd128`
+# rustflags, and `wasm-bindgen-rayon`'s cfg-guard sees what it
+# expects.
 wasm-build:
-    cd crates/photo-frame-wasm && env -u RUSTUP_TOOLCHAIN wasm-pack build --target web --release --out-dir www/pkg
+    cd crates/photo-frame-wasm && env -u RUSTFLAGS RUSTUP_TOOLCHAIN=nightly-2026-04-01 CARGO_UNSTABLE_BUILD_STD=panic_abort,std wasm-pack build --target web --release --out-dir www/pkg
 
 # Mirror the Geist font files from the frame crate into the web bundle's
 # public/ directory so Vite serves them at /fonts/Geist/. Canonical source

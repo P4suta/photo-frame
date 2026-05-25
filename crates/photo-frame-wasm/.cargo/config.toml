@@ -22,7 +22,4 @@ build-std = ["panic_abort", "std"]
 # +simd128: zune-jpeg / fast_image_resize / jpeg-encoder SIMD paths.
 # +atomics, +bulk-memory, +mutable-globals: wasm-threads ABI for
 # wasm-bindgen-rayon. Order matches the wasm-bindgen-rayon README.
-rustflags = [
-    "-C",
-    "target-feature=+simd128,+atomics,+bulk-memory,+mutable-globals",
-]
+rustflags = ["-C", "target-feature=+simd128,+atomics,+bulk-memory,+mutable-globals"]
