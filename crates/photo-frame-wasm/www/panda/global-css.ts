@@ -79,13 +79,13 @@ export const globalCss = defineGlobalStyles({
     border: 'none',
   },
 
-  // Number input — elevated-surface treatment matching the rest of
-  // the sidebar controls.
+  // Number input — page-coloured fill with a thin border. The
+  // grey elevation tier is gone; borders carry the affordance.
   'input[type="number"]': {
     width: '100%',
     paddingX: 'phi.m2',
     paddingY: 'phi.m3',
-    background: 'bg.elev',
+    background: 'transparent',
     color: 'fg.default',
     border: 'default',
     borderRadius: 'phi.m3',

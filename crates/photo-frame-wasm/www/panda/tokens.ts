@@ -38,26 +38,17 @@ const rem = (n: number) => `${n.toFixed(3).replace(/\.?0+$/, '')}rem`;
 export const tokens = defineTokens({
   colors: {
     palette: {
-      // Strict monochrome — nine pigments, no accent, no signal
-      // colour, no warmth. Pure neutral greyscale: every value is
-      // straight on the white→black axis (R=G=B), so the chrome
+      // Strict monochrome — five pigments, no accent, no signal
+      // colour, no warmth, no elevation tiers. Pure neutral
+      // greyscale on the white→black axis (R=G=B), so the chrome
       // never competes with the framed image for tonal attention.
       // Active / primary states get expressed by inverting the
-      // theme; danger and success states use typography
-      // (font-weight, leading glyph, border emphasis) instead of
-      // hue. Black-and-white is the design statement.
+      // theme; element separation comes from borders, not from
+      // raised surfaces. Black-and-white is the design statement.
       //
-      // Dark theme surfaces — three tiers (page → elevated → hover).
-      // Pure black (#000) at the page, lifted ever so slightly on
-      // the elevated tiers so card edges stay readable.
+      // Page surfaces — pure black on dark, pure white on light.
       ink0: { value: '#000000' },
-      ink1: { value: '#141414' },
-      ink2: { value: '#1f1f1f' },
-      // Light theme surfaces — pure white at the page, lightly
-      // greyed on the elevated tiers.
       paper0: { value: '#ffffff' },
-      paper1: { value: '#ededed' },
-      paper2: { value: '#e0e0e0' },
       // Text on each theme — near-pure ends of the greyscale so
       // body copy has the highest readable contrast against the
       // page tier.
@@ -177,22 +168,15 @@ export const semanticTokens = defineSemanticTokens({
     bg: {
       // Page background — `stage` and `sidebar` share the same hue
       // by design; the border between them is the only divider.
-      // Past iterations split them; merging eliminates a token
-      // without losing the visual separation.
+      // There is no `elev` / `elev2` tier any more: card / input
+      // separation comes from borders, hover state comes from
+      // colour / opacity shifts, and the strict-monochrome palette
+      // stays on a single surface tone per theme.
       stage: {
         value: { base: '{colors.palette.ink0}', _light: '{colors.palette.paper0}' },
       },
       sidebar: {
         value: { base: '{colors.palette.ink0}', _light: '{colors.palette.paper0}' },
-      },
-      // Elevated surfaces — meter cards, segmented background,
-      // number input fills. One φ step lighter than the page.
-      elev: {
-        value: { base: '{colors.palette.ink1}', _light: '{colors.palette.paper1}' },
-      },
-      // Hover-state surface — segmented button hover lifts to this.
-      elev2: {
-        value: { base: '{colors.palette.ink2}', _light: '{colors.palette.paper2}' },
       },
     },
     fg: {

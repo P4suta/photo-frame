@@ -224,7 +224,7 @@ export const segmented = css({
   border: 'default',
   borderRadius: 'phi.m3',
   overflow: 'hidden',
-  background: 'bg.elev',
+  background: 'transparent',
 });
 
 export const sliderRow = css({
@@ -269,7 +269,7 @@ export const meter = css({
   gap: 'phi.m2',
   paddingX: 'phi.m1',
   paddingY: 'phi.m1',
-  background: 'bg.elev',
+  background: 'transparent',
   border: 'soft',
   borderRadius: 'phi.m3',
 });

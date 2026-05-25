@@ -111,7 +111,10 @@ const segmentedButton = defineRecipe({
         cursor: 'default',
       },
       false: {
-        _hover: { color: 'fg.default', bg: 'bg.elev2' },
+        // Hover lift is colour-only — there's no elev tier to
+        // shift the background to. `fg.default` reads as a clear
+        // step over the base `fg.dim`.
+        _hover: { color: 'fg.default' },
       },
     },
   },
@@ -142,13 +145,11 @@ const dropZone = defineRecipe({
     _hover: {
       borderColor: 'fg.default',
       color: 'fg.default',
-      background: 'bg.elev',
       outline: 'none',
     },
     _focusVisible: {
       borderColor: 'fg.default',
       color: 'fg.default',
-      background: 'bg.elev',
       outline: 'none',
     },
   },
@@ -156,10 +157,11 @@ const dropZone = defineRecipe({
     over: {
       true: {
         // Drag-over = one notch stronger than hover: dashed → solid
-        // border + elev2 bg. Pure form, no colour.
+        // border. Pure form, no fill — the rest of the chrome is
+        // bg-less so the drop zone shouldn't introduce a tone of
+        // its own.
         borderStyle: 'solid',
         borderColor: 'fg.default',
-        background: 'bg.elev2',
         color: 'fg.default',
       },
       false: {},
