@@ -203,7 +203,19 @@ impl Categorize for CliIoError {
     }
 }
 
+// Heap profiling via dhat-rs. Active only behind the `dhat` cargo
+// feature so the global allocator swap and per-allocation tracking
+// stay out of production builds. When enabled, `dhat-heap.json`
+// lands in the CWD on exit; load it at https://nnethercote.com/dh_view/
+// for the call-tree breakdown Phase B's report references.
+#[cfg(feature = "dhat")]
+#[global_allocator]
+static DHAT_ALLOC: dhat::Alloc = dhat::Alloc;
+
 fn main() -> ExitCode {
+    #[cfg(feature = "dhat")]
+    let _dhat_profiler = dhat::Profiler::new_heap();
+
     install_panic_hook();
     let cli = Cli::parse();
     init_tracing(
