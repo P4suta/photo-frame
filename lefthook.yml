@@ -77,3 +77,8 @@ pre-push:
     # the push has already cost a round-trip.
     web-build:
       run: just web-build
+    # Vitest covers the TS-side logic (pure functions, state
+    # machines, component behaviour). Pairs with `test` (Rust)
+    # so both sides of the WASM boundary have regression nets.
+    web-test:
+      run: just web-test

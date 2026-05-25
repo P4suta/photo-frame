@@ -139,6 +139,14 @@ web-build: wasm-build copy-web-fonts
     just copy-coi-sw
     cd crates/photo-frame-wasm/www && bun run build
 
+# Run the vitest suite (pure-function + component tests).
+# Routed through the host's bun (matches `web-build` /
+# `wasm-dev`) so it doesn't depend on the container's
+# named-volume node_modules being populated.
+web-test:
+    cd crates/photo-frame-wasm/www && bun install --frozen-lockfile
+    cd crates/photo-frame-wasm/www && bun run test
+
 wasm-dev: wasm-build copy-web-fonts
     cd crates/photo-frame-wasm/www && bun install
     just copy-coi-sw
