@@ -194,11 +194,25 @@ export const App = () => {
     canvasRef.height = pixels.height;
     const ctx = canvasRef.getContext('2d');
     if (!ctx) return;
-    // ImageData wants Uint8ClampedArray<ArrayBuffer>. Constructing from
-    // the existing Uint8Array copies the bytes into a fresh ArrayBuffer
-    // — keeps TS happy about the SharedArrayBuffer vs ArrayBuffer split
-    // and is the documented shape for ImageData.
-    const view = new Uint8ClampedArray(pixels.rgba);
+    // Phase F3-lite — zero-copy view onto the cached RGBA bytes.
+    // The three-arg `Uint8ClampedArray(buffer, byteOffset, length)`
+    // constructor produces a view (not a copy) so the canvas read
+    // amortises the WASM-returned buffer instead of paying a 24 MB
+    // memcpy per render at 24 MP. Safe because:
+    //  - `pixels.rgba.buffer` is a regular `ArrayBuffer` (the WASM
+    //    `Uint8Array::new_with_length` constructor never returns a
+    //    SharedArrayBuffer), so the ImageData spec accepts it.
+    //  - The cached `pixels` signal outlives the canvas write, so
+    //    the view's storage stays alive.
+    // The `as ArrayBuffer` cast narrows TS's `ArrayBufferLike` to
+    // the concrete type ImageData wants; runtime guard not needed
+    // because the buffer's origin (`Uint8Array::new_with_length`
+    // in `photo-frame-wasm`) never produces SharedArrayBuffer.
+    const view = new Uint8ClampedArray(
+      pixels.rgba.buffer as ArrayBuffer,
+      pixels.rgba.byteOffset,
+      pixels.rgba.byteLength,
+    );
     ctx.putImageData(new ImageData(view, pixels.width, pixels.height), 0, 0);
   });
 
@@ -222,8 +236,15 @@ export const App = () => {
           estimateTimer = null;
           const token = ++estimateToken;
           try {
+            // Phase F3-lite — `encodeJpeg` already does its own
+            // internal `.slice()` before transferring to the worker,
+            // so an extra slice here was a redundant second 24 MB
+            // memcpy per estimate cycle (5× per second during slider
+            // drag). Pass `intent.rgba` directly; the cached
+            // `previewPixels` buffer stays intact because the worker
+            // only ever receives the encodeJpeg-side copy.
             const jpeg = await encodeJpeg(
-              intent.rgba.slice(),
+              intent.rgba,
               intent.width,
               intent.height,
               intent.quality,
@@ -256,7 +277,12 @@ export const App = () => {
     const started = performance.now();
     try {
       const full = await preparePixels(current.data, buildFrameOptions(effectiveMaxLongEdge()));
-      const jpeg = await encodeJpeg(full.rgba.slice(), full.width, full.height, quality());
+      // Phase F3-lite — `encodeJpeg` slices internally before
+      // worker transfer; a second slice here was redundant. `full`
+      // is consumed immediately after so the cache argument doesn't
+      // apply, but symmetry with the estimate path above keeps the
+      // call-shape consistent.
+      const jpeg = await encodeJpeg(full.rgba, full.width, full.height, quality());
       const blob = new Blob([uint8ToBuffer(jpeg)], { type: 'image/jpeg' });
       triggerDownload(blob, framedName(current.name));
       setStatus(`Saved in ${Math.round(performance.now() - started)} ms`);
