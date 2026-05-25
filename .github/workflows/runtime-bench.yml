@@ -33,6 +33,12 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Wire sccache into rustc
+        run: |
+          echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+          echo 'SCCACHE_GHA_ENABLED=true' >> "$GITHUB_ENV"
+
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: runtime-bench-${{ runner.os }}
@@ -98,6 +104,12 @@ jobs:
           fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Wire sccache into rustc
+        run: |
+          echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+          echo 'SCCACHE_GHA_ENABLED=true' >> "$GITHUB_ENV"
 
       - uses: Swatinem/rust-cache@v2
         with:
