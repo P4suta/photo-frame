@@ -1,7 +1,8 @@
 //! End-to-end rendering: downscale → compose canvas → draw caption →
 //! return packed RGBA8 [`Pixels`].
 
-use image::{imageops, imageops::FilterType, DynamicImage, ImageBuffer, Rgba, RgbaImage};
+use fast_image_resize as fir;
+use image::{imageops, DynamicImage, ImageBuffer, Rgba, RgbaImage};
 use photo_frame_types::{Photograph, Pixels};
 
 use crate::format::{caption_from, Caption};
@@ -82,9 +83,21 @@ fn maybe_downscale(img: RgbaImage, max_long_edge: Option<u32>) -> RgbaImage {
         to_h = new_h,
         "downscaled"
     );
-    DynamicImage::ImageRgba8(img)
-        .resize(new_w, new_h, FilterType::Lanczos3)
-        .to_rgba8()
+
+    // Phase D2 — `fast_image_resize` replaces `DynamicImage::resize`.
+    // The crate auto-selects SSE/AVX2 (or wasm-SIMD-128 when built
+    // with `+simd128`) for the Lanczos3 convolution, and the
+    // `rayon` feature splits the destination by rows across worker
+    // threads. The image crate's resize was single-threaded scalar
+    // and dominated SNS-preset wall-clock at ~440 ms / 24 MP.
+    let src = DynamicImage::ImageRgba8(img);
+    let mut dst = DynamicImage::ImageRgba8(ImageBuffer::<Rgba<u8>, _>::new(new_w, new_h));
+    let options = fir::ResizeOptions::new()
+        .resize_alg(fir::ResizeAlg::Convolution(fir::FilterType::Lanczos3));
+    fir::Resizer::new()
+        .resize(&src, &mut dst, &options)
+        .expect("fir: matched pixel types (RGBA8↔RGBA8) and valid dimensions");
+    dst.into_rgba8()
 }
 
 fn compose_canvas(

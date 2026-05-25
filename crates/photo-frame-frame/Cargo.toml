@@ -14,6 +14,11 @@ path = "src/lib.rs"
 [dependencies]
 photo-frame-types = { workspace = true }
 image             = { workspace = true }
+# Multi-threaded SIMD-accelerated resize for the SNS-preset downscale.
+# Workspace pins the `rayon` feature so native CLI runs use a worker
+# pool; wasm32 ignores it (no thread spawn) but still benefits from
+# the SIMD path when `+simd128` is enabled at build time.
+fast_image_resize = { workspace = true }
 imageproc         = { workspace = true }
 ab_glyph          = { workspace = true }
 thiserror         = { workspace = true }

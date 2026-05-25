@@ -38,9 +38,18 @@ image = { version = "0.25", default-features = false, features = [
 # crate is still used for PNG / TIFF / BMP / WebP and for the
 # `DynamicImage::apply_orientation` shim that turns EXIF
 # Orientation 1..=8 into the right pixel layout.
-zune-jpeg    = "0.5"
-zune-core    = "0.5"
-kamadak-exif = "0.6"
+zune-jpeg = "0.5"
+zune-core = "0.5"
+# Multi-threaded SIMD resize replacing image-crate's single-threaded
+# Lanczos3 for the SNS-preset downscale path. The `rayon` feature
+# uses internal worker threads on native; wasm32 falls back to
+# scalar because rayon's thread spawn isn't available — but the
+# pure-Rust SIMD (wasm SIMD-128 when enabled) still applies.
+fast_image_resize = { version = "5", default-features = false, features = [
+    "image",
+    "rayon",
+] }
+kamadak-exif      = "0.6"
 ab_glyph = "0.2"
 imageproc = { version = "0.26", default-features = false, features = ["text"] }
 thiserror = "2"

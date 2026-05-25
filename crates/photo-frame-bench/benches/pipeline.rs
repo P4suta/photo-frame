@@ -155,3 +155,63 @@ fn pipeline(bencher: Bencher<'_, '_>, fixture: &Fixture) {
             photo_frame::pipeline(black_box(&fixture.bytes), black_box(&opts)).expect("pipeline")
         });
 }
+
+// ─── pipeline_sns: end-to-end SNS preset (max_long_edge=2048) ─────────
+//
+// The default `pipeline` bench above runs with no downscale, which is
+// the path where the renderer's `maybe_downscale` never fires. The
+// SNS preset is the only built-in that triggers it (and the one most
+// users actually pick for social-media sharing), so a dedicated row
+// is the only place Phase D2 (fast_image_resize swap) actually shows
+// its win.
+
+#[divan::bench(args = fixtures::all())]
+fn pipeline_sns(bencher: Bencher<'_, '_>, fixture: &Fixture) {
+    let opts = photo_frame::PipelineOptions::from_preset(photo_frame::QualityPreset::Sns);
+    bencher
+        .counter(ItemsCount::new(fixture.pixel_count()))
+        .bench(|| {
+            photo_frame::pipeline(black_box(&fixture.bytes), black_box(&opts)).expect("pipeline")
+        });
+}
+
+// ─── resize: direct fast_image_resize comparison ───────────────────────
+//
+// `resize_lanczos3_to_sns` above drives the *image crate's* resize
+// directly so the baseline column survives the Phase D2 swap. This
+// sibling bench drives `fast_image_resize` directly on the same
+// inputs so the two rows are an apples-to-apples comparison —
+// looking at both side by side answers "what fraction of the SNS
+// pipeline speedup is the resize itself?".
+
+#[divan::bench(args = fixtures::all())]
+fn resize_fir_lanczos3_to_sns(bencher: Bencher<'_, '_>, fixture: &Fixture) {
+    use fast_image_resize as fir;
+    use image::{DynamicImage, ImageBuffer as IB};
+    let img = synth_rgba_image(fixture);
+    let long = fixture.width.max(fixture.height);
+    let (new_w, new_h) = if long <= SNS_LONG_EDGE {
+        (fixture.width, fixture.height)
+    } else {
+        let edge = u64::from(SNS_LONG_EDGE);
+        let long_u64 = u64::from(long);
+        let w64 = u64::from(fixture.width) * edge / long_u64;
+        let h64 = u64::from(fixture.height) * edge / long_u64;
+        (
+            u32::try_from(w64.max(1)).expect("fits"),
+            u32::try_from(h64.max(1)).expect("fits"),
+        )
+    };
+    let options = fir::ResizeOptions::new()
+        .resize_alg(fir::ResizeAlg::Convolution(fir::FilterType::Lanczos3));
+    bencher
+        .counter(ItemsCount::new(fixture.pixel_count()))
+        .bench_local(|| {
+            let src = DynamicImage::ImageRgba8(img.clone());
+            let mut dst = DynamicImage::ImageRgba8(IB::new(black_box(new_w), black_box(new_h)));
+            fir::Resizer::new()
+                .resize(&src, &mut dst, &options)
+                .expect("fir: same pixel type, valid dims");
+            dst.into_rgba8()
+        });
+}

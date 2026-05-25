@@ -24,6 +24,12 @@ doc   = false
 # Lives under `[dependencies]` (not `[dev-dependencies]`) so the
 # library code that benches `use` is consistent at compile time.
 image = { workspace = true }
+# Used by the `resize_fir_lanczos3_to_sns` bench to compare against
+# the image-crate baseline in `resize_lanczos3_to_sns`. The renderer
+# itself depends on fast_image_resize through photo-frame-frame;
+# the bench depends on it directly so the apples-to-apples row uses
+# the same crate signature.
+fast_image_resize = { workspace = true }
 
 [dev-dependencies]
 photo-frame        = { workspace = true }
