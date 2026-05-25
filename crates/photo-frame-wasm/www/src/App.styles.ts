@@ -138,20 +138,24 @@ export const stageCanvas = css(stageInnerBase, {
 });
 
 // The actual aspect-shaped frame the preview canvas sits in.
-// Used as a wrapper around `<canvas>` so the canvas can resolve
-// `width / height: 100%` against a definite block whose
-// proportions are themselves the golden ratio. A theme-aware
-// shadow gives the frame depth: a soft white glow on the dark
-// theme (black shadows would disappear into the page), a
-// classical black drop shadow on the light theme.
+// Wraps `<canvas>` so the canvas resolves `width / height: 100%`
+// against a definite block. The frame's aspect ratio is set
+// inline from the loaded preview's `width / height` (or the
+// φ:1 default below until the first preview lands).
+//
+// `width: auto + height: auto + max-width/height: 100%` lets
+// CSS's aspect-ratio machinery contain-fit the frame inside
+// the stage: landscape images cap on width and shrink height
+// to match aspect, portrait images cap on height and shrink
+// width. Either way the frame sits fully inside the stage —
+// no axis overflow, no clipping — and the drop shadow falls
+// on the photo's own silhouette.
 export const previewFrame = css({
   aspectRatio: '[1.618]',
+  width: '[auto]',
+  height: '[auto]',
   maxWidth: 'full',
   maxHeight: 'full',
-  width: 'full',
-  // `min(...)` ensures the frame never overflows the parent in
-  // either axis while still preferring the larger dimension.
-  height: '[auto]',
   display: 'flex',
   alignItems: 'stretch',
   justifyContent: 'stretch',

@@ -20,10 +20,6 @@ import {
   fieldBody,
   fieldLabel,
   headerStatus,
-  meter,
-  meterLabel,
-  meterRow,
-  meterValue,
   previewCanvas,
   previewFrame,
   segmented,
@@ -57,13 +53,6 @@ import {
 import { Gallery } from './Gallery';
 
 const PREVIEW_LONG_EDGE = 1600;
-// Phase G1 dropped the prepare-side debounce entirely: the WASM
-// decoded-photograph cache makes redundant prepares cheap (~50 ms
-// frame stage only), and the Phase G2 prefetch loop already
-// serialises through the Worker queue. `ESTIMATE_DEBOUNCE_MS` stays
-// because quality-slider drag still emits dense ticks that an
-// undebounced encode would chase.
-const ESTIMATE_DEBOUNCE_MS = 220;
 
 // `value` mirrors the Rust enum (`paper`/`ink`), `label` is the
 // UI face — direct colour names read more honestly than the
@@ -182,8 +171,6 @@ export const App = () => {
   const [previewVariants, setPreviewVariants] = createSignal<Map<VariantKey, PreparedPixels>>(
     new Map(),
   );
-  const [previewSize, setPreviewSize] = createSignal<number | null>(null);
-  const [previewElapsedMs, setPreviewElapsedMs] = createSignal<number | null>(null);
   const [batchRows, setBatchRows] = createSignal<BatchRow[]>([]);
   const [batchFiles, setBatchFiles] = createSignal<DroppedFile[] | null>(null);
   const [preset, setPreset] = createSignal<PresetKey>('standard');
@@ -287,8 +274,6 @@ export const App = () => {
   const clearSession = (): void => {
     revokeAllBatchUrls();
     setPreviewVariants(new Map());
-    setPreviewSize(null);
-    setPreviewElapsedMs(null);
     setStatus('');
     setSingle(null);
     setBatchFiles(null);
@@ -406,7 +391,6 @@ export const App = () => {
     key: VariantKey,
     gen: number,
   ): Promise<void> => {
-    const started = performance.now();
     setStatus('Framing preview…');
     try {
       const pixels = await preparePixels(current.data, opts);
@@ -416,7 +400,6 @@ export const App = () => {
         next.set(key, pixels);
         return next;
       });
-      setPreviewElapsedMs(Math.round(performance.now() - started));
       setStatus('');
     } catch (error) {
       if (gen === prepareGeneration) setStatus(`Error: ${stringifyError(error)}`);
@@ -536,44 +519,9 @@ export const App = () => {
     onCleanup(() => ro.disconnect());
   });
 
-  // ── estimate effect ──────────────────────────────────────────────
-  // Re-encodes the cached RGBA at the current quality just to read the
-  // resulting byte length; no blob, no canvas redraw. Debounced so a
-  // slider drag posts ≤ ~5 encodes/second.
-  let estimateTimer: ReturnType<typeof setTimeout> | null = null;
-  let estimateToken = 0;
-  createEffect(
-    on(
-      () => {
-        const px = previewPixels();
-        if (!px) return null;
-        return { rgba: px.rgba, width: px.width, height: px.height, quality: quality() };
-      },
-      (intent) => {
-        if (!intent) return;
-        if (estimateTimer !== null) clearTimeout(estimateTimer);
-        estimateTimer = setTimeout(async () => {
-          estimateTimer = null;
-          const token = ++estimateToken;
-          try {
-            // Phase F3-lite — `encodeJpeg` already does its own
-            // internal `.slice()` before transferring to the worker,
-            // so an extra slice here was a redundant second 24 MB
-            // memcpy per estimate cycle (5× per second during slider
-            // drag). Pass `intent.rgba` directly; the cached
-            // `previewPixels` buffer stays intact because the worker
-            // only ever receives the encodeJpeg-side copy.
-            const jpeg = await encodeJpeg(intent.rgba, intent.width, intent.height, intent.quality);
-            if (token !== estimateToken) return;
-            setPreviewSize(jpeg.length);
-          } catch (error) {
-            if (token !== estimateToken) return;
-            setStatus(`Estimate failed: ${stringifyError(error)}`);
-          }
-        }, ESTIMATE_DEBOUNCE_MS);
-      },
-    ),
-  );
+  // (The byte-size estimate effect was removed along with the
+  // sidebar meter that displayed it. Quality presets carry the
+  // intent; the precise byte count was UI noise.)
 
   // ── batch thumbnail effect ───────────────────────────────────────
   //
@@ -667,7 +615,6 @@ export const App = () => {
   };
 
   onCleanup(() => {
-    if (estimateTimer !== null) clearTimeout(estimateTimer);
     if (thumbnailDebounce !== null) clearTimeout(thumbnailDebounce);
     // Phase G2 — bumping the generation invalidates any in-flight
     // prepare/prefetch promises so their completion handlers can't
@@ -921,16 +868,6 @@ export const App = () => {
           />
 
           <Show when={mode() === 'single'}>
-            <div class={meter}>
-              <div class={meterRow}>
-                <span class={meterLabel}>Estimated size</span>
-                <span class={meterValue}>{formatBytes(previewSize())}</span>
-              </div>
-              <div class={meterRow}>
-                <span class={meterLabel}>Render</span>
-                <span class={meterValue}>{formatMs(previewElapsedMs())}</span>
-              </div>
-            </div>
             <button
               type="button"
               class={button({ intent: 'primary' })}
@@ -1146,15 +1083,4 @@ function uint8ToBuffer(u8: Uint8Array): ArrayBuffer {
 function stringifyError(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error);
-}
-
-function formatBytes(n: number | null): string {
-  if (n === null) return '—';
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
-  return `${(n / 1024 / 1024).toFixed(2)} MB`;
-}
-
-function formatMs(n: number | null): string {
-  return n === null ? '—' : `${n} ms`;
 }
