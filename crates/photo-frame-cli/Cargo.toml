@@ -20,6 +20,11 @@ heif    = ["photo-frame/heif"]
 # allocation audit (`docs/PERF-REPORT-baseline.md`) — has nontrivial
 # runtime overhead so it must stay off by default.
 dhat = ["dep:dhat"]
+# Opt-in span-timing flamegraph capture. Adds the `--profile-trace=PATH`
+# CLI flag; when set, replaces the default tracing subscriber with one
+# that writes a `.folded` file `inferno-flamegraph` can render to SVG.
+# Has per-span IO overhead, so off by default.
+trace = ["photo-frame/trace"]
 
 [dependencies]
 photo-frame = { workspace = true }

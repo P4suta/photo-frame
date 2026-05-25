@@ -141,16 +141,20 @@ profile-pipeline fixture:
     @echo "▶ or upload to https://profiler.firefox.com/"
 
 # Render the per-stage tracing span timeline as a flamegraph SVG.
-# Compiles the CLI with the opt-in `trace` feature on photo-frame so
-# pipeline / decode / frame / encode span enter-exit events flush to
-# target/profiling/trace.folded, then turns that into an SVG via
-# `inferno-flamegraph` (mise installs from cargo:inferno). The CLI's
-# `--profile-trace=PATH` flag wiring lands in Phase E; until then,
-# this recipe writes a `.folded` file the user opens manually.
+# Compiles the CLI with the opt-in `trace` feature so the existing
+# pipeline / decode / frame / encode tracing spans flush to a
+# `.folded` file via tracing-flame, then turns that into an SVG via
+# `inferno-flamegraph` (mise installs from cargo:inferno).
 profile-trace fixture:
-    @echo "Phase E will wire the --profile-trace=PATH CLI flag."
-    @echo "For now: invoke photo_frame::trace::flame_guard from your test driver."
-    @false
+    cargo build -p photo-frame-cli --release --features trace
+    mkdir -p target/profiling
+    ./target/release/photo-frame \
+        --profile-trace=target/profiling/trace.folded \
+        {{ fixture }} -o target/profiling/out.jpg
+    inferno-flamegraph < target/profiling/trace.folded > target/profiling/flamegraph.svg
+    @echo ""
+    @echo "▶ folded:    target/profiling/trace.folded"
+    @echo "▶ svg:       target/profiling/flamegraph.svg (open in any browser)"
 
 # End-to-end CLI tests (binary-level subprocess + stdout / stderr /
 # exit code assertions). WASM playwright suite lives separately under

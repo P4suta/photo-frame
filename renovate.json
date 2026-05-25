@@ -10,6 +10,34 @@
       "groupName": "rust crates"
     },
     {
+      "description": "Performance-critical crates land in their own group so a bump that changes bench numbers gets a discrete PR — easier to bisect a regression to the right `BENCHMARKS.md` row.",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": [
+        "divan",
+        "iai-callgrind",
+        "zune-jpeg",
+        "zune-core",
+        "fast_image_resize",
+        "jpeg-encoder",
+        "dhat",
+        "tracing-flame",
+        "wasm-bindgen-rayon"
+      ],
+      "groupName": "perf crates"
+    },
+    {
+      "description": "Perf-tool binaries pinned via mise.toml's `cargo:NAME` entries. Renovate's mise manager picks these up automatically; grouping keeps their PRs visible alongside the cargo perf-crate bumps that often pair with them.",
+      "matchManagers": ["mise"],
+      "matchPackageNames": [
+        "cargo:samply",
+        "cargo:inferno",
+        "cargo:iai-callgrind-runner",
+        "cargo:hyperfine",
+        "cargo:jq"
+      ],
+      "groupName": "perf crates"
+    },
+    {
       "matchManagers": ["npm"],
       "groupName": "npm packages"
     },
