@@ -175,13 +175,13 @@ and clean clones, the bench harness logs a one-line warning and runs
 the synth-only subset. The synth fixtures alone are enough for
 regression detection; the real-world rows in the table below capture
 "as measured on the author's machine" snapshots that future runs need
-to reproduce by dropping the same files into `examples/`.
+to reproduce by dropping the same files into `samples/bench/`.
 
 | Fixture | Source | Dimensions | EXIF orient. | Notes |
 | --- | --- | ---: | :---: | --- |
-| `real_z5_landscape_a_24mp` | `examples/IMG_3936.JPG` | 6016×4016 | 1 | Nikon Z 5 native landscape |
-| `real_z5_landscape_b_24mp` | `examples/IMG_3939.JPG` | 6016×4016 | 1 | second sample, same camera |
-| `real_z5_portrait_rot8_24mp` | `examples/IMG_3940.JPG` | 6016×4016 | 8 | exercises 90° CCW rotation |
+| `real_z5_landscape_a_24mp` | `samples/bench/IMG_3936.JPG` | 6016×4016 | 1 | Nikon Z 5 native landscape |
+| `real_z5_landscape_b_24mp` | `samples/bench/IMG_3939.JPG` | 6016×4016 | 1 | second sample, same camera |
+| `real_z5_portrait_rot8_24mp` | `samples/bench/IMG_3940.JPG` | 6016×4016 | 8 | exercises 90° CCW rotation |
 | `synth_noise_4mp_2400x1600` | xorshift RGB → JPEG q85 | 2400×1600 | 1 | smartphone-class |
 | `synth_noise_12mp_4240x2832` | xorshift RGB → JPEG q85 | 4240×2832 | 1 | mid-range mirrorless |
 | `synth_noise_24mp_6016x4016` | xorshift RGB → JPEG q85 | 6016×4016 | 1 | matches Z 5 sensor MP count |

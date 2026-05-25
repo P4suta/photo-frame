@@ -3,7 +3,7 @@
 //! Two families, both loaded lazily once per process and shared across
 //! every bench iteration:
 //!
-//! - **Real-world** Nikon Z 5 JPEGs at `examples/IMG_*.JPG`. The
+//! - **Real-world** Nikon Z 5 JPEGs at `samples/bench/IMG_*.JPG`. The
 //!   workspace `.gitignore` keeps image binaries out of the repo (the
 //!   project's policy: real photos are personal, large, and rarely
 //!   the right shape for someone else's testing). Loaded via
@@ -62,14 +62,14 @@ impl fmt::Display for Fixture {
     }
 }
 
-/// Try to read a committed JPEG out of the workspace's `examples/`
+/// Try to read a JPEG out of the workspace's `samples/bench/`
 /// directory. Returns `None` if the file is missing — the workspace
 /// `.gitignore` excludes image binaries so this is the expected
 /// state on CI and clean clones. Logs to stderr the first time so
 /// the absence is visible in bench output without flooding logs.
 fn try_load_real(name: &'static str, file: &str) -> Option<Fixture> {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("../../examples");
+    path.push("../../samples/bench");
     path.push(file);
     let bytes = match std::fs::read(&path) {
         Ok(b) => b,
@@ -134,10 +134,10 @@ fn synth_noise_jpeg(name: &'static str, width: u32, height: u32, quality: u8) ->
 // IMG_3940 is portrait via EXIF orientation=8 (90° CCW), so the
 // decode path exercises the rotation pixel-shuffle step on a
 // real-world buffer rather than a synthetic one. All three return
-// `None` if the local examples/ directory doesn't have them — see
-// the module-level note on the gitignore policy.
+// `None` if the local samples/bench/ directory doesn't have them —
+// see the module-level note on the gitignore policy.
 
-/// Z 5 landscape (orientation=1). `None` when missing from `examples/`.
+/// Z 5 landscape (orientation=1). `None` when missing from `samples/bench/`.
 #[must_use]
 pub fn real_z5_landscape_a() -> Option<&'static Fixture> {
     static CELL: OnceLock<Option<Fixture>> = OnceLock::new();

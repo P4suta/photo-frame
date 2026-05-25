@@ -142,7 +142,7 @@ wasm-preview: wasm-build copy-web-fonts
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
-# Run the CLI with arguments, e.g. `just run examples/sample.jpg -o /tmp/out.jpg`
+# Run the CLI with arguments, e.g. `just run samples/scratch/sample.jpg -o /tmp/out.jpg`
 run *args:
     cargo run -p photo-frame-cli -- "$@"
 
