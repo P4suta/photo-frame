@@ -125,7 +125,16 @@ jobs:
           tool: just,cargo-binstall
 
       - name: Install iai-callgrind-runner
-        run: cargo binstall --no-confirm iai-callgrind-runner
+        # `--force` so Swatinem-restored cache state (which sometimes
+        # leaves `.crates.toml` pointing at a binary that isn't
+        # actually on PATH) doesn't short-circuit the install. Then
+        # export the absolute path via `IAI_CALLGRIND_RUNNER` so the
+        # bench binary's `Command::new("iai-callgrind-runner")` lookup
+        # always finds it, regardless of PATH inheritance into the
+        # cargo-bench subprocess.
+        run: |
+          cargo binstall --no-confirm --force iai-callgrind-runner
+          echo "IAI_CALLGRIND_RUNNER=${CARGO_HOME:-$HOME/.cargo}/bin/iai-callgrind-runner" >> "$GITHUB_ENV"
 
       - name: Detect whether the base commit carries the icount harness
         # The icount.rs file was added in the same Phase A commit that
