@@ -38,6 +38,7 @@ import {
   tagline,
   wordmark,
 } from './App.styles';
+import { downloadZip } from 'client-zip';
 import { type DroppedFile, DropZone } from './DropZone';
 import {
   type BatchItem,
@@ -741,19 +742,31 @@ export const App = () => {
     );
   };
 
-  // Trigger one synthetic `<a download>` click per ready row.
-  // The browser will surface a "site wants to download multiple
-  // files" permission prompt the first time; once allowed, the
-  // rest stream to the user's download folder named by their
-  // original filename + `_framed`.
-  const onDownloadAll = (): void => {
-    for (const row of batchRows()) {
-      if (row.status !== 'done' || !row.resultUrl) continue;
-      const anchor = document.createElement('a');
-      anchor.href = row.resultUrl;
-      anchor.download = framedName(row.name);
-      anchor.click();
-    }
+  // Bundle every ready row into a single zip and trigger one
+  // download. Using `client-zip` (≈3 kB gzip, streaming) avoids
+  // the "this site wants to download N files" permission prompt
+  // — the user gets exactly one file, named with an ISO-style
+  // timestamp so successive batches sort cleanly in Downloads.
+  const onDownloadAll = async (): Promise<void> => {
+    const ready = batchRows().filter((r) => r.status === 'done' && r.resultUrl);
+    if (ready.length === 0) return;
+    const entries = await Promise.all(
+      ready.map(async (r) => {
+        // `resultUrl` is a blob: URL — `fetch` round-trips back
+        // into the original Blob without copying the underlying
+        // bytes (the blob registry hands out a reference).
+        const blob = await fetch(r.resultUrl as string).then((res) => res.blob());
+        return { name: framedName(r.name), input: blob, lastModified: new Date() };
+      }),
+    );
+    const zipBlob = await downloadZip(entries).blob();
+    const url = URL.createObjectURL(zipBlob);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `photo-frame-${timestamp}.zip`;
+    anchor.click();
+    URL.revokeObjectURL(url);
   };
 
   // Memoised count of rows whose framed output is ready, used
@@ -862,7 +875,7 @@ export const App = () => {
               type="button"
               class={button({ intent: 'primary' })}
               disabled={batchDoneCount() === 0}
-              onClick={onDownloadAll}
+              onClick={() => void onDownloadAll()}
             >
               {batchDoneCount() === batchRows().length
                 ? `Download all (${batchRows().length})`

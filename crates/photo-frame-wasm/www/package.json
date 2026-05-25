@@ -15,6 +15,7 @@
     "panda-codegen": "panda codegen"
   },
   "dependencies": {
+    "client-zip": "^2.5.0",
     "coi-serviceworker": "*",
     "solid-js": "*"
   },
