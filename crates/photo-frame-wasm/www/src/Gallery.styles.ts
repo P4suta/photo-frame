@@ -140,7 +140,7 @@ export const galleryCardStatus = css({
 export const galleryProgressTrack = css({
   width: 'full',
   height: '[2px]',
-  background: 'bg.muted',
+  background: 'border.default',
   marginTop: 'phi.m1',
   overflow: 'hidden',
 });
@@ -148,7 +148,10 @@ export const galleryProgressTrack = css({
 export const galleryProgressFill = css({
   height: 'full',
   background: 'fg.default',
-  transition: 'width 0.15s linear',
+  // Custom `<property> <duration> <timing>` triplets aren't a Panda
+  // `transition` token — wrap as a bracket-arbitrary value so the
+  // exact CSS triplet ships verbatim.
+  transition: '[width 0.15s linear]',
 });
 
 // (The per-card download button was removed — batch downloads
