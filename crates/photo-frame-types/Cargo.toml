@@ -16,6 +16,14 @@ thiserror = { workspace = true }
 miette    = { workspace = true }
 serde     = { workspace = true }
 
+# Tsify generates `.d.ts` declarations from the same Serde shape the
+# WASM bridge uses, so JS consumers of `StageEvent` / `PipelineSpec`
+# receive a typed discriminated union instead of `any`. wasm32-only
+# so host builds (clippy, tests) stay free of wasm-bindgen.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+tsify-next   = { version = "0.5", default-features = false, features = ["js"] }
+wasm-bindgen = "0.2"
+
 [dev-dependencies]
 # Used by `spec::stage` tests to pin the canonical FFI encoding of
 # `Stage` (lowercase strings). Production code uses
