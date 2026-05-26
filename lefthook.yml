@@ -21,15 +21,24 @@ pre-commit:
       priority: 1
       run: scripts/check-signing.sh config
 
+    # Every formatter / safe-fixer below auto-corrects in place and
+    # re-stages the touched files via `stage_fixed: true` (lefthook's
+    # built-in "fix and continue" pattern). The commit only fails when
+    # a problem can't be machine-fixed — `rustfmt` parse errors, biome
+    # lint findings without a safe codemod, taplo malformed TOML —
+    # which is the only signal worth interrupting the commit for.
     fmt-rust:
       glob: '*.rs'
-      run: docker compose exec -T dev cargo fmt --all -- --check
+      run: docker compose exec -T dev rustfmt --edition 2021 {staged_files}
+      stage_fixed: true
     fmt-ts:
       glob: '*.{ts,tsx,js,jsx,json,jsonc,css}'
-      run: docker compose exec -T dev biome format {staged_files}
+      run: docker compose exec -T dev biome format --write {staged_files}
+      stage_fixed: true
     fmt-toml:
       glob: '*.toml'
-      run: docker compose exec -T dev taplo fmt --check {staged_files}
+      run: docker compose exec -T dev taplo fmt {staged_files}
+      stage_fixed: true
     typos:
       # `--no-progress` was removed in typos-cli ~1.40; `--quiet` is
       # the current way to suppress the progress bar that breaks
@@ -38,13 +47,15 @@ pre-commit:
       # `--write-changes` makes typos auto-fix in place — typos has
       # high precision and the built-in dictionary won't touch
       # ambiguous words, so the autofix is safe to run unattended.
-      # `stage_fixed: true` then re-stages the corrected files so
-      # the commit includes the fixes instead of failing on them.
       run: docker compose exec -T dev typos --quiet --write-changes {staged_files}
       stage_fixed: true
     lint-ts:
       glob: '*.{ts,tsx,js,jsx,css}'
-      run: docker compose exec -T dev biome lint {staged_files}
+      # `--write` applies only biome's safe-fix codemods; unsafe
+      # rewrites (behaviour-changing refactors) still surface as a
+      # hook failure so a human can decide.
+      run: docker compose exec -T dev biome lint --write {staged_files}
+      stage_fixed: true
     # Panda generates `styled-system/` from `panda.config.ts` and the
     # config-side modules under `panda/`. Regenerate when those change
     # so the TS typecheck below works against fresh token / recipe
