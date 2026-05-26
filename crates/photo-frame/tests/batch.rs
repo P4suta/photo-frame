@@ -5,7 +5,7 @@
 //! regressions that an internal-only test would silently let through.
 
 use image::{codecs::jpeg::JpegEncoder, ExtendedColorType, ImageEncoder, RgbImage};
-use photo_frame::{batch_one, BatchOutcome, PipelineOptions};
+use photo_frame::{batch_one, BatchOutcome, PipelineOptions, StageEvent};
 
 fn tiny_jpeg(w: u32, h: u32) -> Vec<u8> {
     let img = RgbImage::from_pixel(w, h, image::Rgb([120, 90, 200]));
@@ -19,8 +19,14 @@ fn tiny_jpeg(w: u32, h: u32) -> Vec<u8> {
 #[test]
 fn batch_one_is_reachable_from_facade_root() {
     let bytes = tiny_jpeg(48, 32);
-    let outcome: BatchOutcome<&str> =
-        batch_one("hero.jpg", &bytes, &PipelineOptions::default(), |_| {});
+    let outcome: BatchOutcome<&str> = batch_one(
+        "hero.jpg",
+        0,
+        1,
+        &bytes,
+        &PipelineOptions::default(),
+        |_event: StageEvent| {},
+    );
     assert_eq!(outcome.key, "hero.jpg");
     assert!(outcome.is_ok());
 }
@@ -34,9 +40,15 @@ fn batch_mixed_inputs_produce_per_item_outcomes() {
         ("bad.jpg", b"not an image".to_vec()),
     ];
     let opts = PipelineOptions::default();
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "fixture sizes are bounded by the test, never approach u32::MAX"
+    )]
+    let total = inputs.len() as u32;
     let outcomes: Vec<_> = inputs
         .iter()
-        .map(|(k, b)| batch_one(*k, b, &opts, |_| {}))
+        .enumerate()
+        .map(|(index, (k, b))| batch_one(*k, index, total, b, &opts, |_event: StageEvent| {}))
         .collect();
     assert_eq!(outcomes.len(), 2);
     assert!(outcomes[0].is_ok(), "first item must succeed");

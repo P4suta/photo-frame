@@ -9,11 +9,11 @@
 //! all three without dragging a heavyweight dependency into the
 //! wasm32-unknown-unknown target.
 
-use photo_frame_types::Stage;
+use photo_frame_types::StageEvent;
 use web_time::Instant;
 
 use crate::options::PipelineOptions;
-use crate::pipeline::{pipeline, PipelineError};
+use crate::pipeline::{pipeline, PipelineError, PipelineObserver};
 
 /// Outcome of processing one batch item.
 ///
@@ -49,6 +49,11 @@ impl<K> BatchOutcome<K> {
 /// Run the full decode → render → encode pipeline on one item and
 /// package the result as a [`BatchOutcome`].
 ///
+/// `index` / `total` locate this item inside its batch (zero-based
+/// index, batch size); together with `key` they ride into every
+/// [`StageEvent`] the observer receives so a UI can label its
+/// per-item progress bar without keeping its own counter.
+///
 /// Errors are *captured*, not propagated — the whole point of the batch
 /// shape is "1 failure does not stop the run". Callers that want
 /// stop-on-first-failure semantics can inspect each outcome and break
@@ -57,14 +62,25 @@ impl<K> BatchOutcome<K> {
     level = "debug",
     name = "batch_one",
     skip_all,
-    fields(input_bytes = bytes.len(), elapsed_ms = tracing::field::Empty),
+    fields(input_bytes = bytes.len(), index, total, elapsed_ms = tracing::field::Empty),
 )]
-pub fn batch_one<K, F>(key: K, bytes: &[u8], opts: &PipelineOptions, on_stage: F) -> BatchOutcome<K>
+pub fn batch_one<K, O>(
+    key: K,
+    index: usize,
+    total: u32,
+    bytes: &[u8],
+    opts: &PipelineOptions,
+    mut observer: O,
+) -> BatchOutcome<K>
 where
-    F: FnMut(Stage),
+    K: ToString,
+    O: PipelineObserver,
 {
+    let key_str = key.to_string();
     let started = Instant::now();
-    let result = pipeline(bytes, opts, on_stage);
+    let result = pipeline(bytes, opts, |stage| {
+        observer.on_stage(StageEvent::new(stage, index, total, key_str.clone()));
+    });
     let elapsed_ms = started.elapsed().as_millis();
     tracing::Span::current().record("elapsed_ms", elapsed_ms);
     BatchOutcome {
@@ -78,6 +94,7 @@ where
 mod tests {
     use super::{batch_one, PipelineOptions};
     use image::{codecs::jpeg::JpegEncoder, ExtendedColorType, ImageEncoder, RgbImage};
+    use photo_frame_types::{Stage, StageEvent};
 
     fn tiny_jpeg(w: u32, h: u32) -> Vec<u8> {
         let img = RgbImage::from_pixel(w, h, image::Rgb([150, 200, 100]));
@@ -91,7 +108,14 @@ mod tests {
     #[test]
     fn batch_one_returns_ok_with_jpeg_bytes() {
         let bytes = tiny_jpeg(64, 48);
-        let outcome = batch_one("photo.jpg", &bytes, &PipelineOptions::default(), |_| {});
+        let outcome = batch_one(
+            "photo.jpg",
+            0,
+            1,
+            &bytes,
+            &PipelineOptions::default(),
+            |_event: StageEvent| {},
+        );
         assert_eq!(outcome.key, "photo.jpg");
         let out = outcome.result.expect("pipeline succeeds");
         // JPEG SOI marker.
@@ -100,7 +124,14 @@ mod tests {
 
     #[test]
     fn batch_one_carries_error_through_pipeline() {
-        let outcome = batch_one(7_u32, &[], &PipelineOptions::default(), |_| {});
+        let outcome = batch_one(
+            7_u32,
+            0,
+            1,
+            &[],
+            &PipelineOptions::default(),
+            |_event: StageEvent| {},
+        );
         assert_eq!(outcome.key, 7);
         assert!(
             outcome.result.is_err(),
@@ -115,7 +146,41 @@ mod tests {
         // we can assert the field is populated — anything from 0 ms
         // upward is acceptable.
         let bytes = tiny_jpeg(16, 16);
-        let outcome = batch_one((), &bytes, &PipelineOptions::default(), |_| {});
+        let outcome = batch_one(
+            42_u32,
+            0,
+            1,
+            &bytes,
+            &PipelineOptions::default(),
+            |_event: StageEvent| {},
+        );
         let _ = outcome.elapsed_ms;
+    }
+
+    #[test]
+    fn batch_one_emits_events_with_index_total_and_key_attached() {
+        let bytes = tiny_jpeg(32, 24);
+        let mut events: Vec<StageEvent> = Vec::new();
+        let _outcome = batch_one(
+            "photo-3.jpg".to_owned(),
+            3,
+            10,
+            &bytes,
+            &PipelineOptions::default(),
+            |event: StageEvent| events.push(event),
+        );
+        assert_eq!(events.len(), 3, "decode + frame + encode = 3 events");
+        for event in &events {
+            assert_eq!(event.index, 3);
+            assert_eq!(event.total, 10);
+            assert_eq!(event.key, "photo-3.jpg");
+        }
+        assert_eq!(events[0].stage, Stage::Decode);
+        assert_eq!(events[1].stage, Stage::Frame);
+        assert_eq!(events[2].stage, Stage::Encode);
+        // Pre-computed percent rides into each event so JS / TS
+        // consumers never need a parallel lookup table.
+        assert_eq!(events[0].percent, Stage::Decode.percent_complete());
+        assert_eq!(events[2].percent, 100);
     }
 }

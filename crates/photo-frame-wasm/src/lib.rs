@@ -28,7 +28,7 @@ use js_sys::{Array, Function, Object, Reflect, Uint8Array};
 use photo_frame::encode::JpegOptions;
 use photo_frame::frame::{CaptionLayout, FrameOptions, FrameTheme, MetaPolicy};
 use photo_frame::{
-    batch_one, DecodeError, Photograph, PipelineError, PipelineOptions, Pixels, Stage,
+    batch_one, DecodeError, Photograph, PipelineError, PipelineOptions, Pixels, Stage, StageEvent,
 };
 use serde::Deserialize;
 use tracing::{debug, error, info, warn};
@@ -266,12 +266,14 @@ pub fn frame_batch(items: &Array, options: JsValue, progress: &Function) -> Resu
     let mut failed = 0u32;
     for (index, raw_item) in items.iter().enumerate() {
         let (key, bytes) = parse_batch_item(&raw_item, index)?;
-        let outcome = {
-            let key = key.as_str();
-            batch_one(key.to_owned(), &bytes, &pipeline_opts, |stage| {
-                emit_progress(progress, index, total, key, stage);
-            })
-        };
+        let outcome = batch_one(
+            key.clone(),
+            index,
+            total,
+            &bytes,
+            &pipeline_opts,
+            |event: StageEvent| emit_progress(progress, &event),
+        );
         let item_obj = Object::new();
         set_or_throw(&item_obj, "key", &JsValue::from_str(&key))?;
         #[allow(
@@ -309,55 +311,68 @@ pub fn frame_batch(items: &Array, options: JsValue, progress: &Function) -> Resu
     Ok(results)
 }
 
-/// Build `{ index, total, key, stage }` and hand it to `progress`.
-/// A throwing callback is logged but does not abort the batch — the
-/// JS side decides whether a progress consumer's failure should
-/// surface.
-fn emit_progress(progress: &Function, index: usize, total: u32, key: &str, stage: Stage) {
-    let stage_label = match stage {
+/// Hand the typed `StageEvent` to the JS-side `progress` callback.
+///
+/// The intermediate JS object still uses the hand-built `Reflect::set`
+/// ladder; step 6 swaps it for `serde_wasm_bindgen::to_value(&event)`
+/// so the JS side receives the `tsify`-generated discriminated union
+/// directly without parallel field-by-field copying.
+fn emit_progress(progress: &Function, event: &StageEvent) {
+    let stage_label = match event.stage {
         Stage::Decode => "decode",
         Stage::Frame => "frame",
         Stage::Encode => "encode",
     };
-    let event = Object::new();
+    let payload = Object::new();
     #[allow(
         clippy::cast_precision_loss,
         reason = "index and total are bounded by JS array length; well below 2^53"
     )]
-    let index_f = index as f64;
+    let index_f = event.index as f64;
     if Reflect::set(
-        &event,
+        &payload,
         &JsValue::from_str("index"),
         &JsValue::from_f64(index_f),
     )
     .is_err()
         || Reflect::set(
-            &event,
+            &payload,
             &JsValue::from_str("total"),
-            &JsValue::from_f64(f64::from(total)),
+            &JsValue::from_f64(f64::from(event.total)),
         )
         .is_err()
-        || Reflect::set(&event, &JsValue::from_str("key"), &JsValue::from_str(key)).is_err()
         || Reflect::set(
-            &event,
+            &payload,
+            &JsValue::from_str("key"),
+            &JsValue::from_str(&event.key),
+        )
+        .is_err()
+        || Reflect::set(
+            &payload,
             &JsValue::from_str("stage"),
             &JsValue::from_str(stage_label),
+        )
+        .is_err()
+        || Reflect::set(
+            &payload,
+            &JsValue::from_str("percent"),
+            &JsValue::from_f64(f64::from(event.percent)),
         )
         .is_err()
     {
         warn!(
             event_id = "wasm.frame_batch.progress.event_build_failed",
-            index,
-            key,
+            index = event.index,
+            key = %event.key,
             stage = stage_label,
         );
         return;
     }
-    if let Err(err) = progress.call1(&JsValue::NULL, &event) {
+    if let Err(err) = progress.call1(&JsValue::NULL, &payload) {
         warn!(
             event_id = "wasm.frame_batch.progress.callback_threw",
-            index,
-            key,
+            index = event.index,
+            key = %event.key,
             stage = stage_label,
             error = ?err,
         );

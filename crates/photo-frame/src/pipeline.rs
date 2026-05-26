@@ -3,7 +3,7 @@
 use miette::Diagnostic;
 use photo_frame_decode::DecodeError;
 use photo_frame_encode::EncodeError;
-use photo_frame_types::{Categorize, Category, Stage};
+use photo_frame_types::{Categorize, Category, Stage, StageEvent};
 use thiserror::Error;
 
 use crate::options::PipelineOptions;
@@ -34,6 +34,26 @@ impl Categorize for PipelineError {
             Self::Decode(e) => e.category(),
             Self::Encode(e) => e.category(),
         }
+    }
+}
+
+/// Sink for the per-stage progress events that `batch_one` (and any
+/// future batch-aware caller) emits during a run.
+///
+/// The trait exists so the CLI's indicatif observer, the WASM bridge's
+/// JS-function observer, and a test capturer all satisfy the same
+/// type bound, eliminating each front-end's parallel implementation of
+/// "decode percent + frame percent + encode percent". The blanket impl
+/// for `FnMut(StageEvent)` keeps the closure spelling that callers
+/// already use ergonomic.
+pub trait PipelineObserver {
+    /// Called once each pipeline stage completes for the item.
+    fn on_stage(&mut self, event: StageEvent);
+}
+
+impl<F: FnMut(StageEvent)> PipelineObserver for F {
+    fn on_stage(&mut self, event: StageEvent) {
+        self(event);
     }
 }
 
