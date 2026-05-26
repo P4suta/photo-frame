@@ -1,4 +1,4 @@
-use crate::primitives::{ExifString, Fnumber, IsoSensitivity};
+use crate::primitives::{ExifString, Fnumber, FocalLengthMm, IsoSensitivity, ShutterSeconds};
 
 /// "Where did this photograph come from?" — capture-time metadata as a
 /// structured, primitive-typed record.
@@ -64,12 +64,14 @@ pub struct Lens {
     pub model: Option<ExifString>,
 }
 
-/// Exposure facts in their canonical *physical* form:
-/// - `focal_length_mm`: the actual lens focal length in millimetres.
-/// - `aperture`: the f-number as a typed [`Fnumber`] (positive, finite).
-/// - `shutter_seconds`: exposure time in seconds (`1.0 / 250.0`, `2.0`).
-/// - `iso`: the ISO sensitivity reading the camera reports, wrapped in
-///   the non-zero [`IsoSensitivity`] newtype.
+/// Exposure facts in their canonical *physical* form, each wrapped in
+/// a typed primitive that pins the relevant invariant:
+/// - `focal_length_mm`: actual lens focal length, [`FocalLengthMm`]
+///   (positive, finite).
+/// - `aperture`: f-number, [`Fnumber`] (positive, finite).
+/// - `shutter_seconds`: exposure time in seconds, [`ShutterSeconds`]
+///   (positive, finite).
+/// - `iso`: ISO sensitivity reading, [`IsoSensitivity`] (non-zero).
 ///
 /// Renderers format these for display; the data itself stays as
 /// already-validated primitives so non-display consumers (JSON
@@ -80,11 +82,11 @@ pub struct Lens {
 pub struct Exposure {
     /// Lens focal length in millimetres, as the camera reported it (no
     /// crop-factor correction applied).
-    pub focal_length_mm: Option<f64>,
+    pub focal_length_mm: Option<FocalLengthMm>,
     /// Aperture as an f-number (e.g. `1.8`, `4.0`).
     pub aperture: Option<Fnumber>,
     /// Shutter time in seconds (e.g. `1.0 / 250.0`, `2.0`).
-    pub shutter_seconds: Option<f64>,
+    pub shutter_seconds: Option<ShutterSeconds>,
     /// ISO sensitivity reading (e.g. `200`, `6400`).
     pub iso: Option<IsoSensitivity>,
 }
@@ -114,7 +116,7 @@ pub struct DateTime {
 #[cfg(test)]
 mod tests {
     use super::{Camera, DateTime, Exposure, Lens, Provenance};
-    use crate::primitives::{ExifString, Fnumber, IsoSensitivity};
+    use crate::primitives::{ExifString, Fnumber, FocalLengthMm, IsoSensitivity, ShutterSeconds};
 
     fn exif(s: &str) -> ExifString {
         ExifString::new(s.to_owned()).expect("non-empty after trim")
@@ -146,9 +148,9 @@ mod tests {
             model: Some(exif("NIKKOR Z 50mm")),
         };
         let _ = Exposure {
-            focal_length_mm: Some(50.0),
+            focal_length_mm: FocalLengthMm::new(50.0),
             aperture: Fnumber::new(1.8),
-            shutter_seconds: Some(1.0 / 250.0),
+            shutter_seconds: ShutterSeconds::new(1.0 / 250.0),
             iso: IsoSensitivity::new(200),
         };
         let _ = DateTime {

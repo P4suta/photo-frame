@@ -26,7 +26,8 @@ pub use crate::category::{Categorize, Category};
 pub use crate::photograph::Photograph;
 pub use crate::pixels::{PixelError, Pixels};
 pub use crate::primitives::{
-    Dimensions, ExifString, Fnumber, IsoSensitivity, JpegQuality, LongEdge, Rgba8,
+    Dimensions, ExifString, Fnumber, FocalLengthMm, IsoSensitivity, JpegQuality, LongEdge, Rgba8,
+    ShutterSeconds,
 };
 pub use crate::provenance::{Camera, DateTime, Exposure, Lens, Provenance};
 pub use crate::spec::{CaptionLayout, FrameTheme, MetaPolicy, PipelineSpec, Stage, StageEvent};

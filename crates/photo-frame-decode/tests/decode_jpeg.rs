@@ -1,7 +1,7 @@
 //! End-to-end JPEG decode: bytes in, Photograph out.
 
 use photo_frame_decode::from_bytes;
-use photo_frame_types::{Fnumber, IsoSensitivity};
+use photo_frame_types::{Fnumber, FocalLengthMm, IsoSensitivity, ShutterSeconds};
 
 #[path = "../src/test_support.rs"]
 mod test_support;
@@ -49,10 +49,11 @@ fn jpeg_with_full_exif_populates_provenance() {
     assert_eq!(lens.model.as_deref(), Some("NIKKOR Z 50mm f/1.8 S"));
 
     let exp = prov.exposure.as_ref().expect("exposure");
-    assert_eq!(exp.focal_length_mm, Some(50.0));
+    assert_eq!(exp.focal_length_mm.map(FocalLengthMm::get), Some(50.0));
     assert_eq!(exp.aperture.map(Fnumber::get), Some(1.8));
     assert!(exp
         .shutter_seconds
+        .map(ShutterSeconds::get)
         .is_some_and(|v| (v - 1.0 / 250.0).abs() < 1e-9));
     assert_eq!(exp.iso.map(IsoSensitivity::get), Some(200));
 

@@ -122,17 +122,66 @@ impl Fnumber {
     /// values or non-finite (`NaN`, `±∞`) inputs.
     #[must_use]
     pub fn new(value: f64) -> Option<Self> {
-        if value.is_finite() && value > 0.0 {
-            Some(Self(value))
-        } else {
-            None
-        }
+        positive_finite(value).map(Self)
     }
 
     /// Unwrap the f-number as a raw `f64`.
     #[must_use]
     pub const fn get(self) -> f64 {
         self.0
+    }
+}
+
+/// Lens focal length in millimetres — positive, finite. Stored as
+/// the *actual* (un-cropped) focal length the camera reported.
+#[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
+pub struct FocalLengthMm(f64);
+
+impl FocalLengthMm {
+    /// Construct from a raw millimetre value. Returns `None` for
+    /// non-positive values or non-finite (`NaN`, `±∞`) inputs.
+    #[must_use]
+    pub fn new(value: f64) -> Option<Self> {
+        positive_finite(value).map(Self)
+    }
+
+    /// Unwrap the focal length as a raw `f64` in millimetres.
+    #[must_use]
+    pub const fn get(self) -> f64 {
+        self.0
+    }
+}
+
+/// Exposure time in seconds — positive, finite.
+///
+/// Spans the practical camera range (~`1.0 / 8000.0` for fast
+/// electronic shutters up to minutes for bulb exposures); the newtype
+/// only refuses obviously nonsensical zeros, negatives, and NaN/∞.
+#[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
+pub struct ShutterSeconds(f64);
+
+impl ShutterSeconds {
+    /// Construct from a raw seconds value. Returns `None` for
+    /// non-positive values or non-finite (`NaN`, `±∞`) inputs.
+    #[must_use]
+    pub fn new(value: f64) -> Option<Self> {
+        positive_finite(value).map(Self)
+    }
+
+    /// Unwrap the exposure time as a raw `f64` in seconds.
+    #[must_use]
+    pub const fn get(self) -> f64 {
+        self.0
+    }
+}
+
+/// Shared invariant the three physical f64 newtypes (`Fnumber`,
+/// `FocalLengthMm`, `ShutterSeconds`) all enforce.
+fn positive_finite(value: f64) -> Option<f64> {
+    if value.is_finite() && value > 0.0 {
+        Some(value)
+    } else {
+        None
     }
 }
 
@@ -244,7 +293,10 @@ impl Rgba8 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Dimensions, ExifString, Fnumber, IsoSensitivity, JpegQuality, LongEdge, Rgba8};
+    use super::{
+        Dimensions, ExifString, Fnumber, FocalLengthMm, IsoSensitivity, JpegQuality, LongEdge,
+        Rgba8, ShutterSeconds,
+    };
 
     #[test]
     fn jpeg_quality_accepts_canonical_range() {
@@ -294,6 +346,27 @@ mod tests {
         assert!(Fnumber::new(f64::NAN).is_none());
         assert!(Fnumber::new(f64::INFINITY).is_none());
         assert_eq!(Fnumber::new(1.8).map(Fnumber::get), Some(1.8));
+    }
+
+    #[test]
+    fn focal_length_rejects_non_positive_and_nan() {
+        assert!(FocalLengthMm::new(0.0).is_none());
+        assert!(FocalLengthMm::new(-50.0).is_none());
+        assert!(FocalLengthMm::new(f64::NAN).is_none());
+        assert!(FocalLengthMm::new(f64::NEG_INFINITY).is_none());
+        assert_eq!(FocalLengthMm::new(50.0).map(FocalLengthMm::get), Some(50.0));
+    }
+
+    #[test]
+    fn shutter_seconds_rejects_non_positive_and_nan() {
+        assert!(ShutterSeconds::new(0.0).is_none());
+        assert!(ShutterSeconds::new(-0.5).is_none());
+        assert!(ShutterSeconds::new(f64::NAN).is_none());
+        assert!(ShutterSeconds::new(f64::INFINITY).is_none());
+        assert_eq!(
+            ShutterSeconds::new(1.0 / 250.0).map(ShutterSeconds::get),
+            Some(1.0 / 250.0),
+        );
     }
 
     #[test]

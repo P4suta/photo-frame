@@ -11,7 +11,9 @@
 //! [`Provenance`]: photo_frame_types::Provenance
 //! [`DateTime`]: photo_frame_types::DateTime
 
-use photo_frame_types::{Camera, DateTime, Exposure, Lens, Provenance};
+use photo_frame_types::{
+    Camera, DateTime, Exposure, Fnumber, FocalLengthMm, Lens, Provenance, ShutterSeconds,
+};
 
 /// The two caption rows the renderer draws. Each side is `Option` so the
 /// renderer can suppress a single corner without re-centering the row.
@@ -107,9 +109,9 @@ fn strip_corporation(model: &str) -> String {
 
 fn exposure_line(exposure: &Exposure) -> Option<String> {
     let parts: Vec<String> = [
-        exposure.focal_length_mm.and_then(format_focal_length),
-        exposure.aperture.and_then(|f| format_aperture(f.get())),
-        exposure.shutter_seconds.and_then(format_seconds),
+        exposure.focal_length_mm.map(format_focal_length),
+        exposure.aperture.map(format_aperture),
+        exposure.shutter_seconds.map(format_seconds),
         exposure.iso.map(|v| format!("ISO {iso}", iso = v.get())),
     ]
     .into_iter()
@@ -118,31 +120,35 @@ fn exposure_line(exposure: &Exposure) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("  ·  "))
 }
 
-fn format_focal_length(mm: f64) -> Option<String> {
-    (mm.is_finite() && mm > 0.0).then(|| format!("{mm:.0}mm"))
+/// Render a [`FocalLengthMm`] as the integer-millimetre caption form
+/// (`"50mm"`). The newtype already guarantees positive + finite, so
+/// the formatter no longer needs a defensive `is_finite` check.
+fn format_focal_length(mm: FocalLengthMm) -> String {
+    format!("{:.0}mm", mm.get())
 }
 
-fn format_aperture(f: f64) -> Option<String> {
-    if !f.is_finite() || f <= 0.0 {
-        return None;
-    }
-    if (f - f.round()).abs() < 0.05 {
-        Some(format!("f/{f:.0}"))
+/// Render an [`Fnumber`] as the caption-style `"f/<n>"` (`"f/1.8"`,
+/// `"f/2"`). Whole-stop values drop the decimal so canonical stops
+/// read more cleanly.
+fn format_aperture(f: Fnumber) -> String {
+    let value = f.get();
+    if (value - value.round()).abs() < 0.05 {
+        format!("f/{value:.0}")
     } else {
-        Some(format!("f/{f:.1}"))
+        format!("f/{value:.1}")
     }
 }
 
-fn format_seconds(secs: f64) -> Option<String> {
-    if !secs.is_finite() || secs <= 0.0 {
-        return None;
-    }
+/// Render a [`ShutterSeconds`] as the canonical caption form: the
+/// reciprocal `"1/<n>s"` below one second, the seconds value above.
+fn format_seconds(s: ShutterSeconds) -> String {
+    let secs = s.get();
     if secs < 1.0 {
-        Some(format!("1/{:.0}s", 1.0 / secs))
+        format!("1/{:.0}s", 1.0 / secs)
     } else if (secs - secs.round()).abs() < 0.05 {
-        Some(format!("{secs:.0}s"))
+        format!("{secs:.0}s")
     } else {
-        Some(format!("{secs:.1}s"))
+        format!("{secs:.1}s")
     }
 }
 
@@ -159,7 +165,8 @@ mod tests {
         strip_corporation,
     };
     use photo_frame_types::{
-        Camera, DateTime, ExifString, Exposure, Fnumber, IsoSensitivity, Lens, Provenance,
+        Camera, DateTime, ExifString, Exposure, Fnumber, FocalLengthMm, IsoSensitivity, Lens,
+        Provenance, ShutterSeconds,
     };
 
     fn exif(s: &str) -> ExifString {
@@ -170,56 +177,46 @@ mod tests {
         Fnumber::new(v).expect("positive finite f-number fixture")
     }
 
+    fn focal(v: f64) -> FocalLengthMm {
+        FocalLengthMm::new(v).expect("positive finite focal-length fixture")
+    }
+
+    fn secs(v: f64) -> ShutterSeconds {
+        ShutterSeconds::new(v).expect("positive finite shutter fixture")
+    }
+
     fn iso(v: u32) -> IsoSensitivity {
         IsoSensitivity::new(v).expect("non-zero ISO fixture")
     }
 
     #[test]
     fn focal_length_rounds_to_integer_mm() {
-        assert_eq!(format_focal_length(50.0).as_deref(), Some("50mm"));
-        assert_eq!(format_focal_length(105.0).as_deref(), Some("105mm"));
+        assert_eq!(format_focal_length(focal(50.0)), "50mm");
+        assert_eq!(format_focal_length(focal(105.0)), "105mm");
     }
 
-    #[test]
-    fn focal_length_rejects_zero_and_nonfinite() {
-        assert!(format_focal_length(0.0).is_none());
-        assert!(format_focal_length(-1.0).is_none());
-        assert!(format_focal_length(f64::INFINITY).is_none());
-        assert!(format_focal_length(f64::NAN).is_none());
-    }
+    // Invariant violations for FocalLengthMm (`0.0`, negatives, NaN,
+    // ∞) live in `primitives::tests` — the type now refuses to
+    // construct, so this formatter never sees a bad value.
 
     #[test]
     fn aperture_uses_one_decimal_when_needed() {
-        assert_eq!(format_aperture(1.8).as_deref(), Some("f/1.8"));
-        assert_eq!(format_aperture(5.6).as_deref(), Some("f/5.6"));
-        assert_eq!(format_aperture(2.0).as_deref(), Some("f/2"));
-    }
-
-    #[test]
-    fn aperture_rejects_invalid() {
-        assert!(format_aperture(0.0).is_none());
-        assert!(format_aperture(f64::NAN).is_none());
+        assert_eq!(format_aperture(fstop(1.8)), "f/1.8");
+        assert_eq!(format_aperture(fstop(5.6)), "f/5.6");
+        assert_eq!(format_aperture(fstop(2.0)), "f/2");
     }
 
     #[test]
     fn seconds_fast_renders_as_fraction() {
-        assert_eq!(format_seconds(1.0 / 250.0).as_deref(), Some("1/250s"));
-        assert_eq!(format_seconds(0.001).as_deref(), Some("1/1000s"));
+        assert_eq!(format_seconds(secs(1.0 / 250.0)), "1/250s");
+        assert_eq!(format_seconds(secs(0.001)), "1/1000s");
     }
 
     #[test]
     fn seconds_slow_renders_as_seconds() {
-        assert_eq!(format_seconds(2.0).as_deref(), Some("2s"));
-        assert_eq!(format_seconds(2.5).as_deref(), Some("2.5s"));
-        assert_eq!(format_seconds(30.0).as_deref(), Some("30s"));
-    }
-
-    #[test]
-    fn seconds_handles_degenerate_input() {
-        assert!(format_seconds(0.0).is_none());
-        assert!(format_seconds(-1.0).is_none());
-        assert!(format_seconds(f64::INFINITY).is_none());
-        assert!(format_seconds(f64::NAN).is_none());
+        assert_eq!(format_seconds(secs(2.0)), "2s");
+        assert_eq!(format_seconds(secs(2.5)), "2.5s");
+        assert_eq!(format_seconds(secs(30.0)), "30s");
     }
 
     #[test]
@@ -263,9 +260,9 @@ mod tests {
                 model: Some(exif("NIKKOR Z 50mm f/1.8 S")),
             }),
             exposure: Some(Exposure {
-                focal_length_mm: Some(50.0),
+                focal_length_mm: Some(focal(50.0)),
                 aperture: Some(fstop(1.8)),
-                shutter_seconds: Some(1.0 / 250.0),
+                shutter_seconds: Some(secs(1.0 / 250.0)),
                 iso: Some(iso(200)),
             }),
             captured_at: Some(DateTime {

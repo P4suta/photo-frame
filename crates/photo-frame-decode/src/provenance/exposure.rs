@@ -6,7 +6,7 @@
 //! presence ("we know aperture and ISO but not shutter") is preserved.
 
 use exif::{Context, Exif, Tag};
-use photo_frame_types::{Exposure, Fnumber, IsoSensitivity};
+use photo_frame_types::{Exposure, Fnumber, FocalLengthMm, IsoSensitivity, ShutterSeconds};
 
 use super::{rational_f64, uint};
 
@@ -40,15 +40,15 @@ pub(crate) fn exposure(exif: &Exif) -> Option<Exposure> {
     Some(exp)
 }
 
-fn focal_length_mm(exif: &Exif) -> Option<f64> {
-    if let Some(v) = rational_f64(exif, Tag::FocalLength).filter(|v| is_positive_finite(*v)) {
+fn focal_length_mm(exif: &Exif) -> Option<FocalLengthMm> {
+    if let Some(v) = rational_f64(exif, Tag::FocalLength).and_then(FocalLengthMm::new) {
         return Some(v);
     }
     let v = uint(exif, Tag::FocalLengthIn35mmFilm)
         .map(f64::from)
-        .filter(|v| is_positive_finite(*v))?;
+        .and_then(FocalLengthMm::new)?;
     tracing::debug!(
-        value = v,
+        value = v.get(),
         "focal length resolved via FocalLengthIn35mmFilm fallback"
     );
     Some(v)
@@ -69,19 +69,16 @@ fn aperture(exif: &Exif) -> Option<Fnumber> {
     Some(v)
 }
 
-fn shutter_seconds(exif: &Exif) -> Option<f64> {
-    if let Some(v) = rational_f64(exif, Tag::ExposureTime).filter(|v| is_positive_finite(*v)) {
+fn shutter_seconds(exif: &Exif) -> Option<ShutterSeconds> {
+    if let Some(v) = rational_f64(exif, Tag::ExposureTime).and_then(ShutterSeconds::new) {
         return Some(v);
     }
     // ShutterSpeedValue is APEX-encoded: T = 2^(-Tv).
     let tv = rational_f64(exif, Tag::ShutterSpeedValue)?;
-    let v = apex_to_seconds(tv);
-    if !is_positive_finite(v) {
-        return None;
-    }
+    let v = ShutterSeconds::new(apex_to_seconds(tv))?;
     tracing::debug!(
         tv,
-        value = v,
+        value = v.get(),
         "shutter resolved via APEX ShutterSpeedValue fallback"
     );
     Some(v)
@@ -116,19 +113,12 @@ fn apex_to_seconds(tv: f64) -> f64 {
     (-tv).exp2()
 }
 
-/// Reject NaN, infinity, zero, and negatives in one place. The decoder
-/// trusts the EXIF *tag* but not the *value*: a real camera writes
-/// positive finite values for every field we read.
-fn is_positive_finite(v: f64) -> bool {
-    v.is_finite() && v > 0.0
-}
-
 #[cfg(test)]
 mod tests {
     use super::{apex_to_f_number, apex_to_seconds, exposure};
     use crate::test_support::{build_tiff, Field};
     use exif::Reader;
-    use photo_frame_types::{Fnumber, IsoSensitivity};
+    use photo_frame_types::{Fnumber, FocalLengthMm, IsoSensitivity};
     use tracing_test::traced_test;
 
     fn parse(ifd0: Vec<Field>, exif_ifd: Vec<Field>) -> exif::Exif {
@@ -149,14 +139,14 @@ mod tests {
             ],
         );
         let exp = exposure(&exif).expect("present");
-        assert_eq!(exp.focal_length_mm, Some(50.0));
+        assert_eq!(exp.focal_length_mm.map(FocalLengthMm::get), Some(50.0));
     }
 
     #[test]
     fn focal_length_falls_back_to_35mm() {
         let exif = parse(vec![], vec![Field::short(0xA405, 50)]);
         let exp = exposure(&exif).expect("present");
-        assert_eq!(exp.focal_length_mm, Some(50.0));
+        assert_eq!(exp.focal_length_mm.map(FocalLengthMm::get), Some(50.0));
     }
 
     #[test]
@@ -191,7 +181,7 @@ mod tests {
             ],
         );
         let exp = exposure(&exif).expect("present");
-        let v = exp.shutter_seconds.expect("present");
+        let v = exp.shutter_seconds.expect("present").get();
         assert!((v - (1.0 / 250.0)).abs() < 1e-9);
     }
 
@@ -200,7 +190,7 @@ mod tests {
         let exif = parse(vec![], vec![Field::srational(0x9201, 8, 1)]);
         let exp = exposure(&exif).expect("present");
         // 2^(-8) = 1/256
-        let v = exp.shutter_seconds.expect("present");
+        let v = exp.shutter_seconds.expect("present").get();
         assert!((v - (1.0 / 256.0)).abs() < 1e-9);
     }
 

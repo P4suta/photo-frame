@@ -405,8 +405,8 @@ mod tests {
     use super::render;
     use crate::options::{FrameOptions, MetaPolicy};
     use photo_frame_types::{
-        Camera, DateTime, ExifString, Exposure, Fnumber, IsoSensitivity, Photograph, Pixels,
-        Provenance,
+        Camera, DateTime, ExifString, Exposure, Fnumber, FocalLengthMm, IsoSensitivity, Photograph,
+        Pixels, Provenance, ShutterSeconds,
     };
 
     fn exif(s: &str) -> ExifString {
@@ -562,9 +562,9 @@ mod tests {
                 model: Some(exif("NIKON Z 5")),
             }),
             exposure: Some(Exposure {
-                focal_length_mm: Some(50.0),
+                focal_length_mm: FocalLengthMm::new(50.0),
                 aperture: Fnumber::new(1.8),
-                shutter_seconds: Some(1.0 / 250.0),
+                shutter_seconds: ShutterSeconds::new(1.0 / 250.0),
                 iso: IsoSensitivity::new(200),
             }),
             captured_at: Some(DateTime {
