@@ -404,7 +404,14 @@ fn draw_caption_centered(
 mod tests {
     use super::render;
     use crate::options::{FrameOptions, MetaPolicy};
-    use photo_frame_types::{Camera, DateTime, Exposure, Photograph, Pixels, Provenance};
+    use photo_frame_types::{
+        Camera, DateTime, ExifString, Exposure, Fnumber, IsoSensitivity, Photograph, Pixels,
+        Provenance,
+    };
+
+    fn exif(s: &str) -> ExifString {
+        ExifString::new(s.to_owned()).expect("non-empty fixture string")
+    }
 
     fn solid_photo(w: u32, h: u32, provenance: Provenance) -> Photograph {
         let buf = vec![200_u8; (w as usize) * (h as usize) * 4];
@@ -435,7 +442,7 @@ mod tests {
         let prov = Provenance {
             camera: Some(Camera {
                 make: None,
-                model: Some("NIKON Z 5".into()),
+                model: Some(exif("NIKON Z 5")),
             }),
             ..Default::default()
         };
@@ -551,14 +558,14 @@ mod tests {
     fn caption_with_full_provenance_widens_and_heightens_canvas() {
         let prov = Provenance {
             camera: Some(Camera {
-                make: Some("NIKON CORPORATION".into()),
-                model: Some("NIKON Z 5".into()),
+                make: Some(exif("NIKON CORPORATION")),
+                model: Some(exif("NIKON Z 5")),
             }),
             exposure: Some(Exposure {
                 focal_length_mm: Some(50.0),
-                aperture: Some(1.8),
+                aperture: Fnumber::new(1.8),
                 shutter_seconds: Some(1.0 / 250.0),
-                iso: Some(200),
+                iso: IsoSensitivity::new(200),
             }),
             captured_at: Some(DateTime {
                 year: 2026,

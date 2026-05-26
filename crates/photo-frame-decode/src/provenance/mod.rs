@@ -31,8 +31,11 @@ pub(crate) fn extract(exif: &Exif) -> Provenance {
 // ── shared tag readers ────────────────────────────────────────────────────
 
 /// Read an ASCII tag, trimming the trailing NUL and whitespace. Returns
-/// `None` for absent, non-ASCII, or empty-after-trim values.
-pub(super) fn ascii(exif: &Exif, tag: Tag) -> Option<String> {
+/// `None` for absent, non-ASCII, or empty-after-trim values. The
+/// returned [`photo_frame_types::ExifString`] enforces "non-empty after
+/// trim" by construction, so call sites can take the value as proof of
+/// that invariant without re-checking.
+pub(super) fn ascii(exif: &Exif, tag: Tag) -> Option<photo_frame_types::ExifString> {
     let field = exif.get_field(tag, In::PRIMARY)?;
     let Value::Ascii(ref bytes) = field.value else {
         return None;
@@ -40,7 +43,7 @@ pub(super) fn ascii(exif: &Exif, tag: Tag) -> Option<String> {
     let first = bytes.first()?;
     let s = std::str::from_utf8(first).ok()?;
     let cleaned = s.trim_end_matches('\0').trim();
-    (!cleaned.is_empty()).then(|| cleaned.to_owned())
+    photo_frame_types::ExifString::new(cleaned.to_owned())
 }
 
 /// Read the first element of a `Rational` *or* `SRational` tag as `f64`.

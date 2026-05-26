@@ -65,6 +65,12 @@ impl LongEdge {
 /// Wraps the raw `String` so call sites can rely on "this is a name a
 /// renderer can show" without re-checking for empty / whitespace-only
 /// inputs scattered across the pipeline.
+///
+/// `Deref<Target = str>` lets call sites treat `ExifString` the same
+/// way they would treat `String` — `Option<ExifString>::as_deref()`
+/// returns `Option<&str>`, methods like `.split('/')` and `.starts_with`
+/// reach through, and the `&str` borrow flows into any
+/// `impl AsRef<str>` API.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ExifString(String);
 
@@ -90,6 +96,20 @@ impl ExifString {
     #[must_use]
     pub fn into_inner(self) -> String {
         self.0
+    }
+}
+
+impl std::ops::Deref for ExifString {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for ExifString {
+    fn as_ref(&self) -> &str {
+        &self.0
     }
 }
 

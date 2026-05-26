@@ -1,6 +1,7 @@
 //! End-to-end JPEG decode: bytes in, Photograph out.
 
 use photo_frame_decode::from_bytes;
+use photo_frame_types::{Fnumber, IsoSensitivity};
 
 #[path = "../src/test_support.rs"]
 mod test_support;
@@ -49,11 +50,11 @@ fn jpeg_with_full_exif_populates_provenance() {
 
     let exp = prov.exposure.as_ref().expect("exposure");
     assert_eq!(exp.focal_length_mm, Some(50.0));
-    assert_eq!(exp.aperture, Some(1.8));
+    assert_eq!(exp.aperture.map(Fnumber::get), Some(1.8));
     assert!(exp
         .shutter_seconds
         .is_some_and(|v| (v - 1.0 / 250.0).abs() < 1e-9));
-    assert_eq!(exp.iso, Some(200));
+    assert_eq!(exp.iso.map(IsoSensitivity::get), Some(200));
 
     let dt = prov.captured_at.as_ref().expect("datetime");
     assert_eq!((dt.year, dt.month, dt.day), (2026, 5, 24));

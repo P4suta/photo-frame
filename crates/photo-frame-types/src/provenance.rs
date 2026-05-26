@@ -1,3 +1,5 @@
+use crate::primitives::{ExifString, Fnumber, IsoSensitivity};
+
 /// "Where did this photograph come from?" — capture-time metadata as a
 /// structured, primitive-typed record.
 ///
@@ -35,49 +37,56 @@ impl Provenance {
 
 /// Camera body, as a free-form make / model pair (both optional).
 ///
-/// EXIF's `Make` and `Model` tags are strings with no canonical format,
-/// so we keep them verbatim and let the renderer decide how to compose
-/// them into a single caption string.
+/// EXIF's `Make` and `Model` tags are strings with no canonical format
+/// (vendor cleanup like `"NIKON CORPORATION"` → `"NIKON"` is a
+/// rendering concern, not a data concern). They ride as
+/// [`ExifString`] so the "non-empty after trimming" invariant is
+/// pinned in the type system rather than re-checked at every caption
+/// formatter.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Camera {
     /// Manufacturer (EXIF `Make`), e.g. `"NIKON CORPORATION"`.
-    pub make: Option<String>,
+    pub make: Option<ExifString>,
     /// Model designation (EXIF `Model`), e.g. `"NIKON Z 5"`.
-    pub model: Option<String>,
+    pub model: Option<ExifString>,
 }
 
 /// Lens, as a free-form make / model pair (both optional).
 ///
 /// Same shape as [`Camera`] for the same reasons — EXIF lens
-/// information is unstructured strings, so we keep them as-is.
+/// information is unstructured strings, so [`ExifString`] pins the
+/// "non-empty after trimming" invariant once at the boundary.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Lens {
     /// Lens manufacturer (EXIF `LensMake`), e.g. `"NIKON"`.
-    pub make: Option<String>,
+    pub make: Option<ExifString>,
     /// Lens model (EXIF `LensModel`), e.g. `"NIKKOR Z 50mm f/1.8 S"`.
-    pub model: Option<String>,
+    pub model: Option<ExifString>,
 }
 
 /// Exposure facts in their canonical *physical* form:
 /// - `focal_length_mm`: the actual lens focal length in millimetres.
-/// - `aperture`: the f-number (e.g. `1.8`, `4.0`).
+/// - `aperture`: the f-number as a typed [`Fnumber`] (positive, finite).
 /// - `shutter_seconds`: exposure time in seconds (`1.0 / 250.0`, `2.0`).
-/// - `iso`: the ISO sensitivity reading the camera reports.
+/// - `iso`: the ISO sensitivity reading the camera reports, wrapped in
+///   the non-zero [`IsoSensitivity`] newtype.
 ///
-/// Renderers format these for display; the data itself stays as numbers
-/// so non-display consumers (JSON serializers, command-line dumpers,
-/// statistical analyses) can use them directly.
+/// Renderers format these for display; the data itself stays as
+/// already-validated primitives so non-display consumers (JSON
+/// serializers, command-line dumpers, statistical analyses) can use
+/// them directly without re-running each fact's "is this a sane value"
+/// check.
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct Exposure {
     /// Lens focal length in millimetres, as the camera reported it (no
     /// crop-factor correction applied).
     pub focal_length_mm: Option<f64>,
     /// Aperture as an f-number (e.g. `1.8`, `4.0`).
-    pub aperture: Option<f64>,
+    pub aperture: Option<Fnumber>,
     /// Shutter time in seconds (e.g. `1.0 / 250.0`, `2.0`).
     pub shutter_seconds: Option<f64>,
     /// ISO sensitivity reading (e.g. `200`, `6400`).
-    pub iso: Option<u32>,
+    pub iso: Option<IsoSensitivity>,
 }
 
 /// Capture moment, broken into calendar components.
@@ -105,6 +114,11 @@ pub struct DateTime {
 #[cfg(test)]
 mod tests {
     use super::{Camera, DateTime, Exposure, Lens, Provenance};
+    use crate::primitives::{ExifString, Fnumber, IsoSensitivity};
+
+    fn exif(s: &str) -> ExifString {
+        ExifString::new(s.to_owned()).expect("non-empty after trim")
+    }
 
     #[test]
     fn default_is_empty() {
@@ -115,8 +129,8 @@ mod tests {
     fn camera_alone_is_not_empty() {
         let p = Provenance {
             camera: Some(Camera {
-                make: Some("NIKON".into()),
-                model: Some("Z 5".into()),
+                make: Some(exif("NIKON")),
+                model: Some(exif("Z 5")),
             }),
             ..Default::default()
         };
@@ -129,13 +143,13 @@ mod tests {
         // downstream crates expect to be able to write.
         let _ = Lens {
             make: None,
-            model: Some("NIKKOR Z 50mm".into()),
+            model: Some(exif("NIKKOR Z 50mm")),
         };
         let _ = Exposure {
             focal_length_mm: Some(50.0),
-            aperture: Some(1.8),
+            aperture: Fnumber::new(1.8),
             shutter_seconds: Some(1.0 / 250.0),
-            iso: Some(200),
+            iso: IsoSensitivity::new(200),
         };
         let _ = DateTime {
             year: 2026,

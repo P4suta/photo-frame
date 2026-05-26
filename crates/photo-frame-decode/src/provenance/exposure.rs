@@ -6,7 +6,7 @@
 //! presence ("we know aperture and ISO but not shutter") is preserved.
 
 use exif::{Context, Exif, Tag};
-use photo_frame_types::Exposure;
+use photo_frame_types::{Exposure, Fnumber, IsoSensitivity};
 
 use super::{rational_f64, uint};
 
@@ -54,19 +54,16 @@ fn focal_length_mm(exif: &Exif) -> Option<f64> {
     Some(v)
 }
 
-fn aperture(exif: &Exif) -> Option<f64> {
-    if let Some(v) = rational_f64(exif, Tag::FNumber).filter(|v| is_positive_finite(*v)) {
+fn aperture(exif: &Exif) -> Option<Fnumber> {
+    if let Some(v) = rational_f64(exif, Tag::FNumber).and_then(Fnumber::new) {
         return Some(v);
     }
     // ApertureValue is APEX-encoded: F = 2^(Av/2).
     let av = rational_f64(exif, Tag::ApertureValue)?;
-    let v = apex_to_f_number(av);
-    if !is_positive_finite(v) {
-        return None;
-    }
+    let v = Fnumber::new(apex_to_f_number(av))?;
     tracing::debug!(
         av,
-        value = v,
+        value = v.get(),
         "aperture resolved via APEX ApertureValue fallback"
     );
     Some(v)
@@ -90,17 +87,17 @@ fn shutter_seconds(exif: &Exif) -> Option<f64> {
     Some(v)
 }
 
-fn iso(exif: &Exif) -> Option<u32> {
+fn iso(exif: &Exif) -> Option<IsoSensitivity> {
     let mut iter = ISO_TAG_CANDIDATES.iter();
     let primary = iter.next().expect("non-empty candidate list");
-    if let Some(v) = uint(exif, *primary) {
+    if let Some(v) = uint(exif, *primary).and_then(IsoSensitivity::new) {
         return Some(v);
     }
     for tag in iter {
-        if let Some(v) = uint(exif, *tag) {
+        if let Some(v) = uint(exif, *tag).and_then(IsoSensitivity::new) {
             tracing::debug!(
                 tag = format!("0x{:04X}", tag.number()),
-                value = v,
+                value = v.get(),
                 "ISO resolved via fallback tag"
             );
             return Some(v);
@@ -131,6 +128,7 @@ mod tests {
     use super::{apex_to_f_number, apex_to_seconds, exposure};
     use crate::test_support::{build_tiff, Field};
     use exif::Reader;
+    use photo_frame_types::{Fnumber, IsoSensitivity};
     use tracing_test::traced_test;
 
     fn parse(ifd0: Vec<Field>, exif_ifd: Vec<Field>) -> exif::Exif {
@@ -171,7 +169,7 @@ mod tests {
             ],
         );
         let exp = exposure(&exif).expect("present");
-        assert_eq!(exp.aperture, Some(1.8));
+        assert_eq!(exp.aperture.map(Fnumber::get), Some(1.8));
     }
 
     #[test]
@@ -179,7 +177,7 @@ mod tests {
         let exif = parse(vec![], vec![Field::rational(0x9202, 4, 1)]);
         let exp = exposure(&exif).expect("present");
         // 2^(4/2) = 4
-        let v = exp.aperture.expect("present");
+        let v = exp.aperture.expect("present").get();
         assert!((v - 4.0).abs() < 1e-9);
     }
 
@@ -210,21 +208,21 @@ mod tests {
     fn iso_primary_tag() {
         let exif = parse(vec![], vec![Field::short(0x8827, 400)]);
         let exp = exposure(&exif).expect("present");
-        assert_eq!(exp.iso, Some(400));
+        assert_eq!(exp.iso.map(IsoSensitivity::get), Some(400));
     }
 
     #[test]
     fn iso_falls_back_to_8832() {
         let exif = parse(vec![], vec![Field::short(0x8832, 800)]);
         let exp = exposure(&exif).expect("present");
-        assert_eq!(exp.iso, Some(800));
+        assert_eq!(exp.iso.map(IsoSensitivity::get), Some(800));
     }
 
     #[test]
     fn iso_falls_back_to_8833() {
         let exif = parse(vec![], vec![Field::short(0x8833, 1600)]);
         let exp = exposure(&exif).expect("present");
-        assert_eq!(exp.iso, Some(1600));
+        assert_eq!(exp.iso.map(IsoSensitivity::get), Some(1600));
     }
 
     #[test]
@@ -240,7 +238,7 @@ mod tests {
         // Only aperture is present.
         let exif = parse(vec![], vec![Field::rational(0x829D, 28, 10)]);
         let exp = exposure(&exif).expect("present");
-        assert_eq!(exp.aperture, Some(2.8));
+        assert_eq!(exp.aperture.map(Fnumber::get), Some(2.8));
         assert!(exp.focal_length_mm.is_none());
         assert!(exp.shutter_seconds.is_none());
         assert!(exp.iso.is_none());

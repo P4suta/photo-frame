@@ -108,9 +108,9 @@ fn strip_corporation(model: &str) -> String {
 fn exposure_line(exposure: &Exposure) -> Option<String> {
     let parts: Vec<String> = [
         exposure.focal_length_mm.and_then(format_focal_length),
-        exposure.aperture.and_then(format_aperture),
+        exposure.aperture.and_then(|f| format_aperture(f.get())),
         exposure.shutter_seconds.and_then(format_seconds),
-        exposure.iso.map(|v| format!("ISO {v}")),
+        exposure.iso.map(|v| format!("ISO {iso}", iso = v.get())),
     ]
     .into_iter()
     .flatten()
@@ -158,7 +158,21 @@ mod tests {
         caption_from, format_aperture, format_date, format_focal_length, format_seconds,
         strip_corporation,
     };
-    use photo_frame_types::{Camera, DateTime, Exposure, Lens, Provenance};
+    use photo_frame_types::{
+        Camera, DateTime, ExifString, Exposure, Fnumber, IsoSensitivity, Lens, Provenance,
+    };
+
+    fn exif(s: &str) -> ExifString {
+        ExifString::new(s.to_owned()).expect("non-empty fixture string")
+    }
+
+    fn fstop(v: f64) -> Fnumber {
+        Fnumber::new(v).expect("positive finite f-number fixture")
+    }
+
+    fn iso(v: u32) -> IsoSensitivity {
+        IsoSensitivity::new(v).expect("non-zero ISO fixture")
+    }
 
     #[test]
     fn focal_length_rounds_to_integer_mm() {
@@ -241,18 +255,18 @@ mod tests {
     fn caption_combines_all_facets() {
         let prov = Provenance {
             camera: Some(Camera {
-                make: Some("NIKON CORPORATION".into()),
-                model: Some("NIKON Z 5".into()),
+                make: Some(exif("NIKON CORPORATION")),
+                model: Some(exif("NIKON Z 5")),
             }),
             lens: Some(Lens {
                 make: None,
-                model: Some("NIKKOR Z 50mm f/1.8 S".into()),
+                model: Some(exif("NIKKOR Z 50mm f/1.8 S")),
             }),
             exposure: Some(Exposure {
                 focal_length_mm: Some(50.0),
-                aperture: Some(1.8),
+                aperture: Some(fstop(1.8)),
                 shutter_seconds: Some(1.0 / 250.0),
-                iso: Some(200),
+                iso: Some(iso(200)),
             }),
             captured_at: Some(DateTime {
                 year: 2026,
@@ -276,8 +290,8 @@ mod tests {
     fn caption_with_partial_exposure_omits_missing_facts() {
         let prov = Provenance {
             exposure: Some(Exposure {
-                aperture: Some(2.8),
-                iso: Some(400),
+                aperture: Some(fstop(2.8)),
+                iso: Some(iso(400)),
                 ..Default::default()
             }),
             ..Default::default()
@@ -297,11 +311,11 @@ mod tests {
         let c = caption_from(&Provenance {
             camera: Some(Camera {
                 make: None,
-                model: Some("NIKON Z 5".into()),
+                model: Some(exif("NIKON Z 5")),
             }),
             lens: Some(Lens {
                 make: None,
-                model: Some("NIKKOR Z 50mm f/1.8 S".into()),
+                model: Some(exif("NIKKOR Z 50mm f/1.8 S")),
             }),
             ..Default::default()
         });
@@ -316,7 +330,7 @@ mod tests {
         let c = caption_from(&Provenance {
             camera: Some(Camera {
                 make: None,
-                model: Some("NIKON Z 5".into()),
+                model: Some(exif("NIKON Z 5")),
             }),
             ..Default::default()
         });
@@ -328,7 +342,7 @@ mod tests {
     fn camera_label_falls_back_to_make_when_model_missing() {
         let prov = Provenance {
             camera: Some(Camera {
-                make: Some("SONY".into()),
+                make: Some(exif("SONY")),
                 model: None,
             }),
             ..Default::default()
