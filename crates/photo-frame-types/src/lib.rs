@@ -17,10 +17,14 @@ mod category;
 mod photograph;
 mod pixels;
 mod preset;
+mod primitives;
 mod provenance;
 
 pub use crate::category::{Categorize, Category};
 pub use crate::photograph::Photograph;
 pub use crate::pixels::{PixelError, Pixels};
 pub use crate::preset::QualityPreset;
+pub use crate::primitives::{
+    Dimensions, ExifString, Fnumber, IsoSensitivity, JpegQuality, LongEdge,
+};
 pub use crate::provenance::{Camera, DateTime, Exposure, Lens, Provenance};
