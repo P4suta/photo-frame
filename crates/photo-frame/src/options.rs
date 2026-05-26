@@ -8,9 +8,16 @@ use photo_frame_encode::JpegOptions;
 use photo_frame_frame::FrameOptions;
 use photo_frame_types::QualityPreset;
 
+/// End-to-end options consumed by [`crate::pipeline()`].
+///
+/// Holds the per-stage option structs side by side so a caller resolves
+/// `--preset` / `--quality` / `--max-long-edge` once, then hands the
+/// bundle to every batch item.
 #[derive(Clone, Debug)]
 pub struct PipelineOptions {
+    /// Frame-stage options (theme, caption layout, downscale cap).
     pub frame: FrameOptions,
+    /// JPEG encoder options (quality 1..=100).
     pub jpeg: JpegOptions,
 }
 

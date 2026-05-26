@@ -35,6 +35,7 @@ import init, {
   render_pixels,
 } from '../pkg/photo_frame_wasm.js';
 import type { FrameOptionsForPrepare, PipelineOptions } from './frame-client';
+import { type Stage, stageToPercent } from './lib/progress';
 
 export type BatchItem = {
   key: string;
@@ -93,6 +94,12 @@ export type WorkerProgress = {
   index: number;
   total: number;
   key: string;
+  /** Last pipeline stage that finished for this item; absent on the
+   * initial "item started" event. */
+  stage?: Stage;
+  /** Cumulative percent for the current item, 0..100. Derived from
+   * `stage` via {@link stageToPercent}. */
+  percent: number;
 };
 export type WorkerDone = { kind: 'done'; results: BatchResult[] };
 export type WorkerError = {
@@ -188,11 +195,24 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
 
     case 'batch': {
       try {
-        // Per-item progress is approximated: WASM returns the whole batch
-        // at once, so we report the start of each item *before* the call
-        // and the synthesised "done" event after. Per-item progress mid-
-        // WASM-call would require N=1 slicing and the JS↔WASM hop cost
-        // would dominate for small inputs.
+        // The Rust `frame_batch` fires this callback once per
+        // pipeline stage (decode → frame → encode) for every item,
+        // so the main thread sees a steady stream of stage events
+        // and can drive a smooth per-item progress bar.
+        const onStage = (event: { index: number; total: number; key: string; stage: string }) => {
+          const stage = event.stage as Stage;
+          post({
+            kind: 'progress',
+            index: event.index,
+            total: event.total,
+            key: event.key,
+            stage,
+            percent: stageToPercent(stage),
+          });
+        };
+        // Each item also emits a "started" event up-front (percent
+        // 0, no stage yet) so the row visibly switches to
+        // `processing` even before decode completes.
         for (let i = 0; i < req.items.length; i++) {
           const item = req.items[i];
           if (!item) continue;
@@ -201,9 +221,10 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
             index: i,
             total: req.items.length,
             key: item.key,
+            percent: 0,
           });
         }
-        const raw = frame_batch(req.items, req.options) as unknown as BatchResult[];
+        const raw = frame_batch(req.items, req.options, onStage) as unknown as BatchResult[];
         post({ kind: 'done', results: raw });
       } catch (error) {
         post({ kind: 'error', requestId: null, message: errorMessage(error) });

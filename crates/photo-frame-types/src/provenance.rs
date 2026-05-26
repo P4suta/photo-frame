@@ -7,9 +7,17 @@
 /// to gracefully drop missing facts from the caption.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Provenance {
+    /// Camera body that produced the image (make + model, both
+    /// individually optional).
     pub camera: Option<Camera>,
+    /// Lens mounted on the camera (make + model, both individually
+    /// optional).
     pub lens: Option<Lens>,
+    /// Exposure values reported by the camera (focal length, aperture,
+    /// shutter speed, ISO).
     pub exposure: Option<Exposure>,
+    /// Capture timestamp as the camera recorded it, in the camera's
+    /// local time (not normalised to UTC — see [`DateTime`]).
     pub captured_at: Option<DateTime>,
 }
 
@@ -25,15 +33,28 @@ impl Provenance {
     }
 }
 
+/// Camera body, as a free-form make / model pair (both optional).
+///
+/// EXIF's `Make` and `Model` tags are strings with no canonical format,
+/// so we keep them verbatim and let the renderer decide how to compose
+/// them into a single caption string.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Camera {
+    /// Manufacturer (EXIF `Make`), e.g. `"NIKON CORPORATION"`.
     pub make: Option<String>,
+    /// Model designation (EXIF `Model`), e.g. `"NIKON Z 5"`.
     pub model: Option<String>,
 }
 
+/// Lens, as a free-form make / model pair (both optional).
+///
+/// Same shape as [`Camera`] for the same reasons — EXIF lens
+/// information is unstructured strings, so we keep them as-is.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Lens {
+    /// Lens manufacturer (EXIF `LensMake`), e.g. `"NIKON"`.
     pub make: Option<String>,
+    /// Lens model (EXIF `LensModel`), e.g. `"NIKKOR Z 50mm f/1.8 S"`.
     pub model: Option<String>,
 }
 
@@ -48,9 +69,14 @@ pub struct Lens {
 /// statistical analyses) can use them directly.
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct Exposure {
+    /// Lens focal length in millimetres, as the camera reported it (no
+    /// crop-factor correction applied).
     pub focal_length_mm: Option<f64>,
+    /// Aperture as an f-number (e.g. `1.8`, `4.0`).
     pub aperture: Option<f64>,
+    /// Shutter time in seconds (e.g. `1.0 / 250.0`, `2.0`).
     pub shutter_seconds: Option<f64>,
+    /// ISO sensitivity reading (e.g. `200`, `6400`).
     pub iso: Option<u32>,
 }
 
@@ -61,11 +87,18 @@ pub struct Exposure {
 /// photographer expects to see in the caption.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct DateTime {
+    /// Calendar year (e.g. `2026`).
     pub year: u16,
+    /// Calendar month, `1..=12`.
     pub month: u8,
+    /// Calendar day of month, `1..=31`.
     pub day: u8,
+    /// Hour of day, `0..=23`.
     pub hour: u8,
+    /// Minute of hour, `0..=59`.
     pub minute: u8,
+    /// Second of minute, `0..=59` (no leap-second representation — EXIF
+    /// doesn't carry one either).
     pub second: u8,
 }
 

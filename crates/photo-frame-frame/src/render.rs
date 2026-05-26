@@ -7,7 +7,7 @@ use photo_frame_types::{Photograph, Pixels};
 use rayon::prelude::*;
 
 use crate::format::{caption_from, Caption};
-use crate::geometry::{self, Layout, MetaLayout};
+use crate::geometry::{self, Composition, LayoutStyle, MetaLayout};
 use crate::num::round_to_u32;
 use crate::options::{CaptionLayout, FrameOptions, MetaPolicy};
 use crate::text::{Renderer, Weight};
@@ -31,8 +31,7 @@ use crate::text::{Renderer, Weight};
 pub(crate) fn render(photo: Photograph, opts: &FrameOptions) -> Pixels {
     // Destructure the Photograph so the pixel buffer can move into
     // `ImageBuffer::from_raw` (zero-copy) while the provenance stays
-    // borrowed for caption formatting. Phase C1 — eliminates the 92 MB
-    // `.to_vec()` copy the v1 path paid at the renderer boundary.
+    // borrowed for caption formatting.
     let Photograph { pixels, provenance } = photo;
     let upright = pixels_to_rgba_image(pixels);
     let upright = maybe_downscale(upright, opts.max_long_edge);
@@ -43,13 +42,18 @@ pub(crate) fn render(photo: Photograph, opts: &FrameOptions) -> Pixels {
     };
     let caption_visible = !caption.is_empty();
 
-    let layout = geometry::compute((upright.width(), upright.height()), caption_visible);
+    let style = match opts.layout {
+        CaptionLayout::Polaroid => LayoutStyle::Polaroid,
+        _ => LayoutStyle::Standard,
+    };
+    let composition =
+        geometry::compute((upright.width(), upright.height()), caption_visible, style);
     let span = tracing::Span::current();
-    span.record("canvas_width", layout.canvas_size.0);
-    span.record("canvas_height", layout.canvas_size.1);
+    span.record("canvas_width", composition.canvas.0);
+    span.record("canvas_height", composition.canvas.1);
     span.record("caption_visible", caption_visible);
 
-    let canvas = compose_canvas(&layout, &upright, &caption, opts);
+    let canvas = compose_canvas(&composition, &upright, &caption, opts);
     let (w, h) = canvas.dimensions();
     Pixels::from_rgba8(w, h, canvas.into_raw())
         .expect("geometry guarantees a positive RGBA8 canvas")
@@ -85,12 +89,10 @@ fn maybe_downscale(img: RgbaImage, max_long_edge: Option<u32>) -> RgbaImage {
         "downscaled"
     );
 
-    // Phase D2 — `fast_image_resize` replaces `DynamicImage::resize`.
-    // The crate auto-selects SSE/AVX2 (or wasm-SIMD-128 when built
-    // with `+simd128`) for the Lanczos3 convolution, and the
+    // `fast_image_resize` auto-selects SSE/AVX2 (or wasm-SIMD-128 when
+    // built with `+simd128`) for the Lanczos3 convolution, and the
     // `rayon` feature splits the destination by rows across worker
-    // threads. The image crate's resize was single-threaded scalar
-    // and dominated SNS-preset wall-clock at ~440 ms / 24 MP.
+    // threads.
     let src = DynamicImage::ImageRgba8(img);
     let mut dst = DynamicImage::ImageRgba8(ImageBuffer::<Rgba<u8>, _>::new(new_w, new_h));
     let options = fir::ResizeOptions::new()
@@ -102,22 +104,27 @@ fn maybe_downscale(img: RgbaImage, max_long_edge: Option<u32>) -> RgbaImage {
 }
 
 fn compose_canvas(
-    layout: &Layout,
+    composition: &Composition,
     photo: &RgbaImage,
     caption: &Caption,
     opts: &FrameOptions,
 ) -> RgbaImage {
-    let (canvas_w, canvas_h) = layout.canvas_size;
-    let mut canvas = build_canvas_with_photo(canvas_w, canvas_h, photo, layout, opts);
+    let (canvas_w, canvas_h) = composition.canvas;
+    let mut canvas = build_canvas_with_photo(canvas_w, canvas_h, photo, composition, opts);
 
-    if let Some(ml) = layout.meta.as_ref() {
+    if let Some(ml) = composition.meta.as_ref() {
         let renderer = Renderer::new(opts.theme.ink());
+        let photo_w = composition.photo_size.0;
+        let metrics = fit_caption(&renderer, caption, opts.layout, ml, photo_w);
         match opts.layout {
             CaptionLayout::Edges => {
-                draw_caption_edges(&mut canvas, &renderer, ml, caption, canvas_w);
+                draw_caption_edges(&mut canvas, &renderer, ml, caption, &metrics);
             },
-            CaptionLayout::Centered => {
-                draw_caption_centered(&mut canvas, &renderer, ml, caption, canvas_w);
+            CaptionLayout::Centered | CaptionLayout::Polaroid => {
+                // Polaroid geometry already centres the strip in a
+                // thick bottom band — same renderer used for both
+                // centred-text layouts.
+                draw_caption_centered(&mut canvas, &renderer, ml, caption, &metrics, canvas_w);
             },
         }
     }
@@ -125,25 +132,17 @@ fn compose_canvas(
     canvas
 }
 
-/// Phase C4 — single-pass row-parallel canvas build.
-///
-/// Replaces the previous two-pass sequence
-/// (`RgbaImage::from_pixel` to fill with bg, then `imageops::replace`
-/// to overwrite the photo region). Each row is independent, so we
-/// allocate the destination Vec up-front and have rayon dispatch
-/// rows to worker threads. Each row does at most three memcpy / memset
-/// operations: left margin (bg), photo bytes, right margin (bg).
-/// Rows above/below the photo are a single memset.
-///
-/// Single-pass also halves memory traffic (was 2× canvas-size scans:
-/// once to fill, once to overwrite). For a 24 MP canvas (~98 MB),
-/// that's the difference between ~200 MB and ~100 MB of L1/L2-miss
-/// load, on top of the parallel speedup.
+/// Single-pass row-parallel canvas build: each row is independent,
+/// so the destination `Vec` is allocated up-front and `rayon`
+/// dispatches rows to worker threads. Each row does at most three
+/// `memcpy`/`memset` operations (left margin bg, photo bytes, right
+/// margin bg); rows above and below the photo are a single
+/// `memset`.
 fn build_canvas_with_photo(
     canvas_w: u32,
     canvas_h: u32,
     photo: &RgbaImage,
-    layout: &Layout,
+    composition: &Composition,
     opts: &FrameOptions,
 ) -> RgbaImage {
     let bg = opts.theme.background();
@@ -151,7 +150,7 @@ fn build_canvas_with_photo(
     let canvas_stride = (canvas_w as usize) * 4;
     let total_bytes = (canvas_h as usize) * canvas_stride;
 
-    let (photo_origin_x, photo_origin_y) = layout.photo_origin;
+    let (photo_origin_x, photo_origin_y) = composition.photo_origin;
     let (photo_width, photo_height) = photo.dimensions();
     let photo_left = photo_origin_x as usize;
     let photo_top = photo_origin_y as usize;
@@ -207,21 +206,133 @@ fn fill_row_with_bg(row: &mut [u8], bg: [u8; 4]) {
     }
 }
 
+/// Caption metrics after the auto-fit step has decided how big the
+/// text actually needs to render. The geometry layer hands us the
+/// ideal font heights for the photo's size; here we measure the
+/// actual caption strings against the photo's horizontal column and
+/// shrink the font proportionally if the ideal sizes would overflow.
+/// The vertical positions move with the font so the (now smaller)
+/// text block stays centred in the strip.
+struct CaptionMetrics {
+    primary_font: f32,
+    secondary_font: f32,
+    primary_y: u32,
+    secondary_y: u32,
+}
+
+/// Measure the caption against the photo's horizontal column and
+/// derive the actual render-time font sizes and y-positions. When
+/// the ideal font already fits, returns the geometry layer's values
+/// verbatim; when not, scales the font down proportionally so the
+/// widest row equals the photo width, and re-centres the smaller
+/// text block in the strip.
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "photo widths are small enough that f32 conversion is exact"
+)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "positions and font heights are clamped non-negative before casting"
+)]
+fn fit_caption(
+    renderer: &Renderer,
+    caption: &Caption,
+    layout: CaptionLayout,
+    ml: &MetaLayout,
+    photo_w: u32,
+) -> CaptionMetrics {
+    let photo_w_f = photo_w as f32;
+    // Minimum visible separator between left- and right-aligned
+    // strings in the Edges layout — half the primary font's height,
+    // which reads as roughly one character's worth of space at any
+    // scale.
+    let edges_min_gap = ml.primary_font_height * 0.5;
+
+    let (top_req, bot_req) = match layout {
+        CaptionLayout::Edges => {
+            let top_l = caption.top_left.as_deref().map_or(0.0, |t| {
+                renderer.measure(t, ml.primary_font_height, Weight::Medium)
+            });
+            let top_r = caption.top_right.as_deref().map_or(0.0, |t| {
+                renderer.measure(t, ml.primary_font_height, Weight::Medium)
+            });
+            let bot_l = caption.bottom_left.as_deref().map_or(0.0, |t| {
+                renderer.measure(t, ml.secondary_font_height, Weight::Regular)
+            });
+            let bot_r = caption.bottom_right.as_deref().map_or(0.0, |t| {
+                renderer.measure(t, ml.secondary_font_height, Weight::Regular)
+            });
+            let top = if top_l > 0.0 && top_r > 0.0 {
+                top_l + top_r + edges_min_gap
+            } else {
+                top_l.max(top_r)
+            };
+            let bot = if bot_l > 0.0 && bot_r > 0.0 {
+                bot_l + bot_r + edges_min_gap
+            } else {
+                bot_l.max(bot_r)
+            };
+            (top, bot)
+        },
+        CaptionLayout::Centered | CaptionLayout::Polaroid => {
+            let top = caption.top_combined().as_deref().map_or(0.0, |t| {
+                renderer.measure(t, ml.primary_font_height, Weight::Medium)
+            });
+            let bot = caption.bottom_combined().as_deref().map_or(0.0, |t| {
+                renderer.measure(t, ml.secondary_font_height, Weight::Regular)
+            });
+            (top, bot)
+        },
+    };
+
+    let max_req = top_req.max(bot_req);
+    let scale = if max_req > photo_w_f && max_req > 0.0 {
+        photo_w_f / max_req
+    } else {
+        1.0
+    };
+
+    let primary_font = ml.primary_font_height * scale;
+    let secondary_font = ml.secondary_font_height * scale;
+    let line_gap = ml.line_gap * scale;
+
+    // Recompute vertical text block placement: centre the (possibly
+    // smaller) block within the strip rectangle the geometry layer
+    // allocated.
+    let strip_top = ml.region.1 as f32;
+    let strip_h = ml.region.3 as f32;
+    let text_block_h = primary_font + line_gap + secondary_font;
+    let pad = ((strip_h - text_block_h) * 0.5).max(0.0);
+    let primary_y_f = strip_top + pad;
+    let secondary_y_f = primary_y_f + primary_font + line_gap;
+
+    CaptionMetrics {
+        primary_font,
+        secondary_font,
+        primary_y: primary_y_f.round() as u32,
+        secondary_y: secondary_y_f.round() as u32,
+    }
+}
+
 fn draw_caption_edges(
     canvas: &mut RgbaImage,
     renderer: &Renderer,
     ml: &MetaLayout,
     caption: &Caption,
-    canvas_w: u32,
+    metrics: &CaptionMetrics,
 ) {
-    let right_x = canvas_w.saturating_sub(ml.pad_x);
-
+    // Four-corner layout anchored to the photo's left and right edges.
+    // The primary row (camera / lens) uses the larger font and
+    // medium weight; the secondary row (exposure / date) uses the
+    // smaller `primary / φ` font and regular weight. The caption and
+    // the photo share a single horizontal column.
     if let Some(text) = caption.top_left.as_deref() {
         renderer.draw_left(
             canvas,
-            ml.pad_x,
-            ml.top_line_y,
-            ml.font_height,
+            ml.photo_left_x,
+            metrics.primary_y,
+            metrics.primary_font,
             Weight::Medium,
             text,
         );
@@ -229,9 +340,9 @@ fn draw_caption_edges(
     if let Some(text) = caption.top_right.as_deref() {
         renderer.draw_right(
             canvas,
-            right_x,
-            ml.top_line_y,
-            ml.font_height,
+            ml.photo_right_x,
+            metrics.primary_y,
+            metrics.primary_font,
             Weight::Medium,
             text,
         );
@@ -239,9 +350,9 @@ fn draw_caption_edges(
     if let Some(text) = caption.bottom_left.as_deref() {
         renderer.draw_left(
             canvas,
-            ml.pad_x,
-            ml.bottom_line_y,
-            ml.font_height,
+            ml.photo_left_x,
+            metrics.secondary_y,
+            metrics.secondary_font,
             Weight::Regular,
             text,
         );
@@ -249,9 +360,9 @@ fn draw_caption_edges(
     if let Some(text) = caption.bottom_right.as_deref() {
         renderer.draw_right(
             canvas,
-            right_x,
-            ml.bottom_line_y,
-            ml.font_height,
+            ml.photo_right_x,
+            metrics.secondary_y,
+            metrics.secondary_font,
             Weight::Regular,
             text,
         );
@@ -263,15 +374,17 @@ fn draw_caption_centered(
     renderer: &Renderer,
     ml: &MetaLayout,
     caption: &Caption,
+    metrics: &CaptionMetrics,
     canvas_w: u32,
 ) {
+    let _ = ml; // currently only the metrics drive centred layout
     let cx = canvas_w / 2;
     if let Some(text) = caption.top_combined() {
         renderer.draw_center(
             canvas,
             cx,
-            ml.top_line_y,
-            ml.font_height,
+            metrics.primary_y,
+            metrics.primary_font,
             Weight::Medium,
             &text,
         );
@@ -280,8 +393,8 @@ fn draw_caption_centered(
         renderer.draw_center(
             canvas,
             cx,
-            ml.bottom_line_y,
-            ml.font_height,
+            metrics.secondary_y,
+            metrics.secondary_font,
             Weight::Regular,
             &text,
         );
@@ -300,19 +413,26 @@ mod tests {
         Photograph::new(pixels, provenance)
     }
 
-    #[test]
-    fn render_without_caption_uses_symmetric_thin_border() {
-        let photo = solid_photo(200, 100, Provenance::default());
-        let opts = FrameOptions::default();
-        let out = render(photo, &opts);
-        // side = side_for(min(200,100)) = side_for(100) = max(round(100/φ⁶), 8) = 8
-        // bottom collapses to side when caption empty → canvas = (200+16, 100+16) = (216, 116)
-        assert_eq!(out.width(), 216);
-        assert_eq!(out.height(), 116);
+    const PHI_F64: f64 = 1.618_033_988_749_895;
+
+    fn quantum(pw: u32, ph: u32) -> u32 {
+        let short = f64::from(pw.min(ph));
+        crate::num::round_to_u32(short / PHI_F64.powi(6))
     }
 
     #[test]
-    fn render_with_caption_grows_bottom_strip() {
+    fn render_without_caption_canvas_uses_heavier_no_meta_mat() {
+        let photo = solid_photo(200, 100, Provenance::default());
+        let out = render(photo, &FrameOptions::default());
+        // No caption → mat doubles to 2·quantum, so canvas widens and
+        // heightens by 4·quantum per axis (±2 px rounding tolerance).
+        let q = quantum(200, 100);
+        assert!(out.width().abs_diff(200 + 4 * q) <= 2);
+        assert!(out.height().abs_diff(100 + 4 * q) <= 2);
+    }
+
+    #[test]
+    fn render_with_caption_canvas_includes_strip_and_3_mats() {
         let prov = Provenance {
             camera: Some(Camera {
                 make: None,
@@ -321,15 +441,16 @@ mod tests {
             ..Default::default()
         };
         let photo = solid_photo(200, 100, prov);
-        let opts = FrameOptions::default();
-        let out = render(photo, &opts);
-        // side = 8, bottom = round(8·φ²) = 21 (instead of 8 collapse) → h = 100+8+21 = 129
-        assert_eq!(out.width(), 216);
-        assert_eq!(out.height(), 129);
+        let out = render(photo, &FrameOptions::default());
+        let q = quantum(200, 100);
+        // mat = 2·quantum (uniform). canvas.W = photo + 2·mat = +4·q;
+        // canvas.H = photo + 3·mat + strip(= 2·q) = +8·q. ±4 px on H.
+        assert!(out.width().abs_diff(200 + 4 * q) <= 2);
+        assert!(out.height().abs_diff(100 + 8 * q) <= 4);
     }
 
     #[test]
-    fn render_meta_policy_never_collapses_strip_even_with_provenance() {
+    fn render_meta_policy_never_uses_no_meta_canvas_even_with_provenance() {
         let prov = Provenance {
             captured_at: Some(DateTime {
                 year: 2026,
@@ -345,7 +466,12 @@ mod tests {
             ..Default::default()
         };
         let out = render(photo, &opts);
-        assert_eq!(out.height(), 116, "bottom strip must collapse with Never");
+        // Never forces show_meta=false → no strip, heavier mat
+        // (2·quantum) replaces the strip's mass: +4·quantum total
+        // (±2 px rounding tolerance).
+        let q = quantum(200, 100);
+        assert!(out.width().abs_diff(200 + 4 * q) <= 2);
+        assert!(out.height().abs_diff(100 + 4 * q) <= 2);
     }
 
     #[test]
@@ -356,10 +482,11 @@ mod tests {
             ..Default::default()
         };
         let out = render(photo, &opts);
-        // After downscale: long edge clamped to 100, short edge halved → 100×50.
-        // side_for(50) = max(round(50/φ⁶), 8) = 8 → canvas = (100+16, 50+16) = (116, 66)
-        assert_eq!(out.width(), 116);
-        assert_eq!(out.height(), 66);
+        // After downscale 400×200 → 100×50. No caption → 4·quantum
+        // per axis (heavier no-meta mat, ±2 px rounding tolerance).
+        let q = quantum(100, 50);
+        assert!(out.width().abs_diff(100 + 4 * q) <= 2);
+        assert!(out.height().abs_diff(50 + 4 * q) <= 2);
     }
 
     #[test]
@@ -370,10 +497,10 @@ mod tests {
             ..Default::default()
         };
         let out = render(photo, &opts);
-        // 80x40 already <= 100 long edge: pass through.
-        // side_for(40) = max(round(40/φ⁶), 8) = 8 → canvas = (80+16, 40+16) = (96, 56)
-        assert_eq!(out.width(), 96);
-        assert_eq!(out.height(), 56);
+        // 80×40 already ≤ 100: no downscale. No caption → heavier mat.
+        let q = quantum(80, 40);
+        assert!(out.width().abs_diff(80 + 4 * q) <= 2);
+        assert!(out.height().abs_diff(40 + 4 * q) <= 2);
     }
 
     #[test]
@@ -404,12 +531,12 @@ mod tests {
         let top_left = &buf[0..4];
         assert_eq!(
             top_left,
-            Rgba([0x1A, 0x1A, 0x1A, 255]).0.as_slice(),
-            "ink-theme border must paint soft-black at the canvas corner",
+            Rgba([0, 0, 0, 255]).0.as_slice(),
+            "ink-theme border must paint black at the canvas corner",
         );
         let last_pixel = (out.width() as usize) * (out.height() as usize) * 4 - 4;
         let bottom_right = &buf[last_pixel..last_pixel + 4];
-        assert_eq!(bottom_right, Rgba([0x1A, 0x1A, 0x1A, 255]).0.as_slice());
+        assert_eq!(bottom_right, Rgba([0, 0, 0, 255]).0.as_slice());
     }
 
     #[test]
@@ -422,7 +549,7 @@ mod tests {
     }
 
     #[test]
-    fn caption_with_full_provenance_renders_larger_strip() {
+    fn caption_with_full_provenance_widens_and_heightens_canvas() {
         let prov = Provenance {
             camera: Some(Camera {
                 make: Some("NIKON CORPORATION".into()),
@@ -444,9 +571,8 @@ mod tests {
         };
         let photo = solid_photo(800, 600, prov);
         let out = render(photo, &FrameOptions::default());
-        // We don't pin exact dimensions here (geometry tests cover that);
-        // we just verify the output is sane and the strip expanded.
-        assert!(out.width() > 800);
-        assert!(out.height() > 600 + 16);
+        let q = quantum(800, 600);
+        assert!(out.width().abs_diff(800 + 4 * q) <= 2);
+        assert!(out.height().abs_diff(600 + 8 * q) <= 4);
     }
 }

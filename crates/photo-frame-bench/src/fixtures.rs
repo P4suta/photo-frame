@@ -35,15 +35,19 @@ use image::{ExtendedColorType, ImageEncoder, ImageReader, RgbImage};
 
 /// A single benchmarkable input: name, dimensions, and the raw bytes
 /// the decoder will be handed. The struct is the unit of bench
-/// parameterisation — divan uses [`Display`] for the per-row label.
+/// parameterisation — divan uses [`std::fmt::Display`] for the per-row label.
 #[derive(Debug)]
 pub struct Fixture {
     /// Stable identifier used as the bench row label and the
     /// `BENCHMARKS.md` row key. Snake-case, includes the megapixel
     /// count so the row sorts intuitively.
     pub name: &'static str,
+    /// Image width in pixels (used for the megapixel-throughput
+    /// derivation).
     pub width: u32,
+    /// Image height in pixels.
     pub height: u32,
+    /// Encoded JPEG bytes that the pipeline takes as input.
     pub bytes: Vec<u8>,
 }
 

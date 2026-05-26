@@ -132,9 +132,23 @@ export const galleryCardStatus = css({
   '&[data-status="error"]': {
     borderLeft: 'strong',
   },
-  '&[data-status="processing"] .gallery-thumb': {
-    animation: '[gallery-pulse 1.2s ease-in-out infinite]',
-  },
+});
+
+// Per-item progress track shown while `status === 'processing'`.
+// Replaces the older pulse animation with a deterministic fill
+// driven by Rust-side stage events (decode → frame → encode).
+export const galleryProgressTrack = css({
+  width: 'full',
+  height: '[2px]',
+  background: 'bg.muted',
+  marginTop: 'phi.m1',
+  overflow: 'hidden',
+});
+
+export const galleryProgressFill = css({
+  height: 'full',
+  background: 'fg.default',
+  transition: 'width 0.15s linear',
 });
 
 // (The per-card download button was removed — batch downloads

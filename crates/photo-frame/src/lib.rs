@@ -1,9 +1,14 @@
-//! Liit-style golden-ratio photo framing.
+//! Golden-ratio photo framing.
+//!
+//! The canvas is a golden rectangle; the photo lives in the upper square
+//! that subdivision produces, and a meta strip — the subdivision residue
+//! — carries the caption. Every dimension downstream is a measurement on
+//! a sub-rectangle, not the result of a `φⁿ` multiplication.
 //!
 //! This crate is the **facade**: it re-exports every type a caller needs
 //! from the three stage crates (`photo-frame-decode`, `photo-frame-frame`,
-//! `photo-frame-encode`) and offers one helper, [`pipeline`], that runs
-//! the whole bytes-in / JPEG-out path in three lines.
+//! `photo-frame-encode`) and offers one helper, [`pipeline()`], that
+//! runs the whole bytes-in / JPEG-out path in three lines.
 //!
 //! For the WASM and CLI front-ends the helper is enough; the underlying
 //! crates are also re-exported for callers that need to keep the
@@ -33,4 +38,4 @@ pub use photo_frame_types::{
 
 pub use crate::batch::{batch_one, BatchOutcome};
 pub use crate::options::PipelineOptions;
-pub use crate::pipeline::{pipeline, PipelineError};
+pub use crate::pipeline::{pipeline, PipelineError, Stage};

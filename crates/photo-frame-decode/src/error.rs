@@ -17,6 +17,8 @@ pub enum DecodeError {
         code(photo_frame::decode::empty_input),
         help("Pass a real image file. `--help` shows accepted formats.")
     )]
+    /// Input byte buffer was empty (0 bytes). No format can be detected
+    /// or decoded from nothing.
     EmptyInput,
 
     #[error("could not determine image format from input bytes")]
@@ -27,6 +29,9 @@ pub enum DecodeError {
              HEIC requires `--features heif` on the photo-frame-cli build."
         )
     )]
+    /// Input bytes didn't match any signature the decoder recognises.
+    /// Either the format is unsupported or the file is corrupted in its
+    /// header.
     UnknownFormat,
 
     // Kept in both feature configurations so downstream `match` arms compile
@@ -40,6 +45,9 @@ pub enum DecodeError {
              Requires libheif >= 1.18 on the host (libheif-dev on Debian)."
         )
     )]
+    /// Input is HEIC/HEIF but the crate was built without the `heif`
+    /// feature. Rebuild with `--features heif` to enable libheif-backed
+    /// decoding.
     HeifFeatureDisabled,
 
     #[error("failed to decode image")]
@@ -52,6 +60,8 @@ pub enum DecodeError {
              below names the format-specific reason."
         )
     )]
+    /// A non-JPEG decoder from the `image` crate (PNG, TIFF, BMP, WebP)
+    /// failed to parse the input.
     Decode(#[source] image::ImageError),
 
     // zune-jpeg path (Phase D1). Separate variant so the diagnostic
@@ -68,6 +78,9 @@ pub enum DecodeError {
              re-export the file through any standard photo editor."
         )
     )]
+    /// The `zune-jpeg` decoder (the JPEG fast path) rejected the input.
+    /// Kept as a distinct variant from [`DecodeError::Decode`] so the
+    /// diagnostic chain names which decoder actually failed.
     JpegDecode(#[source] zune_jpeg::errors::DecodeErrors),
 
     #[cfg(feature = "heif")]
@@ -90,6 +103,8 @@ pub enum DecodeError {
              don't agree. This is a bug in the decode path, not the input."
         )
     )]
+    /// The decoder produced pixel data that violates [`PixelError`]
+    /// invariants — i.e. a decode-path bug rather than a bad input.
     InvalidPixels(#[from] PixelError),
 }
 

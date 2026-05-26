@@ -51,7 +51,11 @@ pub enum EncodeError {
         code(photo_frame::encode::invalid_quality),
         help("JPEG quality must be 1..=100. Try a value like 78 (SNS), 92 (standard), 98 (max).")
     )]
-    InvalidQuality { got: u8 },
+    /// Caller passed a JPEG quality outside the accepted 1..=100 range.
+    InvalidQuality {
+        /// The out-of-range quality value the caller supplied.
+        got: u8,
+    },
 
     #[error("image dimension {got} exceeds JPEG limit of {max}")]
     #[diagnostic(
@@ -63,7 +67,14 @@ pub enum EncodeError {
              large, split it into tiles."
         )
     )]
-    DimensionOverflow { got: u32, max: u32 },
+    /// One of the input pixel buffer's dimensions is larger than what
+    /// JPEG's stream format can represent (16 bits per axis).
+    DimensionOverflow {
+        /// The over-large dimension value (in pixels).
+        got: u32,
+        /// JPEG's per-axis maximum, i.e. [`u16::MAX`].
+        max: u32,
+    },
 
     #[error("JPEG encoder failed")]
     #[diagnostic(
@@ -74,6 +85,9 @@ pub enum EncodeError {
              wrapped error has the format-specific reason."
         )
     )]
+    /// The underlying `jpeg-encoder` crate returned an error mid-encode
+    /// (typically out-of-memory on very large canvases or a malformed
+    /// pixel buffer).
     Encode(#[source] EncodingError),
 }
 

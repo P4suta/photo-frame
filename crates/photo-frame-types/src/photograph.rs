@@ -10,7 +10,13 @@ use crate::provenance::Provenance;
 /// already parsed into structured primitives.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Photograph {
+    /// Decoded RGBA8 pixels, already oriented upright (EXIF orientation
+    /// applied at decode time).
     pub pixels: Pixels,
+    /// Structured metadata parsed from the source image (camera, lens,
+    /// exposure, capture timestamp). All fields are `Option`s; an empty
+    /// [`Provenance`] is valid and just means the source carried no
+    /// usable metadata.
     pub provenance: Provenance,
 }
 

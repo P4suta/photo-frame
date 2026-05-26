@@ -116,6 +116,20 @@ impl Renderer {
         draw_text_mut(canvas, self.ink, x, to_i32(top_y), scale, font, text);
     }
 
+    /// Measure the rendered width of `text` at the given font height
+    /// and weight, returning a sub-pixel `f32` (the sum of horizontal
+    /// glyph advances). The auto-fit step in [`crate::render()`]
+    /// uses this to detect when a caption would overflow the photo
+    /// column and to shrink the font accordingly.
+    pub(crate) fn measure(&self, text: &str, font_height: f32, weight: Weight) -> f32 {
+        if text.is_empty() {
+            return 0.0;
+        }
+        let font = self.font_for(weight);
+        let scale = PxScale::from(font_height);
+        text_width(font, scale, text)
+    }
+
     const fn font_for(&self, weight: Weight) -> &FontRef<'static> {
         match weight {
             Weight::Regular => &self.regular,

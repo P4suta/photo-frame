@@ -1,4 +1,4 @@
-//! Caller-facing options for [`crate::render`].
+//! Caller-facing options for [`crate::render()`].
 //!
 //! Quality/encoding knobs (`jpeg_quality`) live in `photo-frame-encode`;
 //! this struct holds only what the renderer itself consumes — the
@@ -11,23 +11,15 @@ use image::Rgba;
 /// Paired frame colour + ink colour preset.
 ///
 /// Project policy is that these two values *travel together* — a "white
-/// frame with dark text" vs. "black frame with light text" is one
+/// frame with black text" vs. "black frame with white text" is one
 /// decision, not two — so we expose them as one enum rather than
 /// independent fields.
-///
-/// The colour values aren't pure 0/255 endpoints: pure white can wash
-/// out against bright photos and pure black sits noticeably "above" a
-/// dark photo. The current values were picked by eye to sit flush
-/// against typical photographic content.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum FrameTheme {
-    /// White frame (#FFFFFF), dark ink (#3C3C3C). The original v1
-    /// look — appropriate for most prints and SNS uploads.
+    /// White frame, black ink.
     #[default]
     Paper,
-    /// Soft-black frame (#1A1A1A), soft-white ink (#E8E8E8). Reads
-    /// well for photos that already feature a lot of light (snow,
-    /// sky, paper subjects); the frame doesn't compete.
+    /// Black frame, white ink.
     Ink,
 }
 
@@ -37,7 +29,7 @@ impl FrameTheme {
     pub const fn background(self) -> Rgba<u8> {
         match self {
             Self::Paper => Rgba([255, 255, 255, 255]),
-            Self::Ink => Rgba([0x1A, 0x1A, 0x1A, 255]),
+            Self::Ink => Rgba([0, 0, 0, 255]),
         }
     }
 
@@ -45,8 +37,8 @@ impl FrameTheme {
     #[must_use]
     pub const fn ink(self) -> Rgba<u8> {
         match self {
-            Self::Paper => Rgba([60, 60, 60, 255]),
-            Self::Ink => Rgba([0xE8, 0xE8, 0xE8, 255]),
+            Self::Paper => Rgba([0, 0, 0, 255]),
+            Self::Ink => Rgba([255, 255, 255, 255]),
         }
     }
 
@@ -60,22 +52,35 @@ impl FrameTheme {
     }
 }
 
-/// How the caption strip arranges its facets.
+/// How the caption is arranged inside the framed print.
 ///
-/// `Edges` keeps the original liit-style four-corner layout (camera
-/// / lens on the top row, exposure / date on the bottom). `Centered`
-/// joins each row with a `"  ·  "` separator and centres it under the
-/// photo — useful when the photo's subject sits central and a
-/// symmetric caption looks more deliberate.
+/// The first two variants share the same standard frame geometry
+/// (photo centred in a uniform-mat canvas, strip below the photo);
+/// they differ only in horizontal composition of the caption. The
+/// third variant switches to a Polaroid-style geometry: photo
+/// top-anchored, large bottom band with caption centred inside.
+///
+/// - `Edges` keeps the four-corner layout — camera left, lens right
+///   on the primary row; exposure left, date right on the secondary
+///   row. Left- and right-aligned text snap to the photo's left and
+///   right edges, so caption and photo share a single visual column.
+/// - `Centered` joins each row with a `"  ·  "` separator and centres
+///   the result horizontally inside the strip.
+/// - `Polaroid` selects the Polaroid frame geometry (photo at top,
+///   thick bottom band) and centres the caption inside the band.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum CaptionLayout {
-    /// Camera/lens at the top edges, exposure/date at the bottom
-    /// edges. The historical v1 + v2 default.
+    /// Camera/lens at the primary-row corners, exposure/date at the
+    /// secondary-row corners; both rows anchored to the photo's left
+    /// and right edges so caption text shares a column with the photo.
     #[default]
     Edges,
     /// Both rows centred under the photo, with the same `"  ·  "`
     /// separator used inside the exposure line.
     Centered,
+    /// Polaroid-style frame: photo at top, thick bottom band carries
+    /// both caption rows centred horizontally inside the band.
+    Polaroid,
 }
 
 impl CaptionLayout {
@@ -85,6 +90,7 @@ impl CaptionLayout {
         match self {
             Self::Edges => "edges",
             Self::Centered => "centered",
+            Self::Polaroid => "polaroid",
         }
     }
 }
@@ -103,11 +109,14 @@ pub enum MetaPolicy {
     Never,
 }
 
-/// Configuration for [`crate::render`].
+/// Configuration for [`crate::render()`].
 #[derive(Clone, Debug, Default)]
 pub struct FrameOptions {
+    /// Paired frame colour + caption ink. See [`FrameTheme`].
     pub theme: FrameTheme,
+    /// How the caption strip distributes its facets. See [`CaptionLayout`].
     pub layout: CaptionLayout,
+    /// Whether the metadata strip is drawn at all. See [`MetaPolicy`].
     pub meta_policy: MetaPolicy,
     /// If set, downscale the photo so its longer edge is at most this many
     /// pixels before framing. Intended for browser previews and the SNS
@@ -133,18 +142,19 @@ mod tests {
     fn layout_labels_are_short_lowercase() {
         assert_eq!(CaptionLayout::Edges.label(), "edges");
         assert_eq!(CaptionLayout::Centered.label(), "centered");
+        assert_eq!(CaptionLayout::Polaroid.label(), "polaroid");
     }
 
     #[test]
-    fn paper_theme_locked_colours() {
+    fn paper_theme_is_pure_white_on_pure_black() {
         assert_eq!(FrameTheme::Paper.background(), Rgba([255, 255, 255, 255]));
-        assert_eq!(FrameTheme::Paper.ink(), Rgba([60, 60, 60, 255]));
+        assert_eq!(FrameTheme::Paper.ink(), Rgba([0, 0, 0, 255]));
     }
 
     #[test]
-    fn ink_theme_locked_colours() {
-        assert_eq!(FrameTheme::Ink.background(), Rgba([0x1A, 0x1A, 0x1A, 255]));
-        assert_eq!(FrameTheme::Ink.ink(), Rgba([0xE8, 0xE8, 0xE8, 255]));
+    fn ink_theme_is_pure_black_on_pure_white() {
+        assert_eq!(FrameTheme::Ink.background(), Rgba([0, 0, 0, 255]));
+        assert_eq!(FrameTheme::Ink.ink(), Rgba([255, 255, 255, 255]));
     }
 
     #[test]

@@ -24,12 +24,14 @@ use std::error::Error;
 use std::fmt::Write;
 use std::sync::{Mutex, OnceLock};
 
-use js_sys::{Array, Object, Reflect, Uint8Array};
+use js_sys::{Array, Function, Object, Reflect, Uint8Array};
 use photo_frame::encode::JpegOptions;
 use photo_frame::frame::{CaptionLayout, FrameOptions, FrameTheme, MetaPolicy};
-use photo_frame::{batch_one, DecodeError, Photograph, PipelineError, PipelineOptions, Pixels};
+use photo_frame::{
+    batch_one, DecodeError, Photograph, PipelineError, PipelineOptions, Pixels, Stage,
+};
 use serde::Deserialize;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use tracing_wasm::{set_as_global_default_with_config, WASMLayerConfigBuilder};
 use wasm_bindgen::prelude::{wasm_bindgen, JsCast, JsError, JsValue};
 
@@ -44,6 +46,9 @@ use wasm_bindgen::prelude::{wasm_bindgen, JsCast, JsError, JsValue};
 #[cfg(target_arch = "wasm32")]
 pub use wasm_bindgen_rayon::init_thread_pool;
 
+/// WASM module entry point invoked automatically by `wasm-bindgen` on
+/// import. Installs the panic-to-console hook and wires `tracing`
+/// events to `console.log`. Idempotent — safe to call multiple times.
 #[wasm_bindgen(start)]
 pub fn init() {
     console_error_panic_hook::set_once();
@@ -231,11 +236,13 @@ pub fn encode_jpeg(rgba: &[u8], width: u32, height: u32, quality: u8) -> Result<
 /// objects. Each result has the shape `{ key, ok: bool,
 /// result: Uint8Array | string, elapsed_ms: number }` — the `result`
 /// field is the framed JPEG bytes on success or the human-readable
-/// error chain on failure (mirroring [`display_chain`]).
+/// error chain on failure (rendered the same way `display_chain` does).
 ///
-/// `options` carries the full [`PipelineOptions`] shape including
-/// `jpeg_quality` — batch is atomic per item so splitting encode out
-/// would only inflate WASM ↔ JS hops without any caching benefit.
+/// `progress` is a JS function invoked once each pipeline stage
+/// completes — front-ends use it to fill a per-item progress bar.
+/// The event passed in is `{ index, total, key, stage }` where
+/// `stage` is one of `"decode"`, `"frame"`, or `"encode"`. The JS
+/// side decides how stage labels map to a numeric percentage.
 ///
 /// # Errors
 /// A [`JsError`] is returned only for failures that prevent the batch
@@ -243,7 +250,7 @@ pub fn encode_jpeg(rgba: &[u8], width: u32, height: u32, quality: u8) -> Result<
 /// Per-item failures are *captured* in the returned array — a single
 /// bad JPEG never aborts the batch.
 #[wasm_bindgen]
-pub fn frame_batch(items: &Array, options: JsValue) -> Result<Array, JsError> {
+pub fn frame_batch(items: &Array, options: JsValue, progress: &Function) -> Result<Array, JsError> {
     let total = items.length();
     let span = tracing::info_span!(
         "wasm_frame_batch",
@@ -259,7 +266,12 @@ pub fn frame_batch(items: &Array, options: JsValue) -> Result<Array, JsError> {
     let mut failed = 0u32;
     for (index, raw_item) in items.iter().enumerate() {
         let (key, bytes) = parse_batch_item(&raw_item, index)?;
-        let outcome = batch_one(key.clone(), &bytes, &pipeline_opts);
+        let outcome = {
+            let key = key.as_str();
+            batch_one(key.to_owned(), &bytes, &pipeline_opts, |stage| {
+                emit_progress(progress, index, total, key, stage);
+            })
+        };
         let item_obj = Object::new();
         set_or_throw(&item_obj, "key", &JsValue::from_str(&key))?;
         #[allow(
@@ -295,6 +307,61 @@ pub fn frame_batch(items: &Array, options: JsValue) -> Result<Array, JsError> {
         total, succeeded, failed, "batch complete"
     );
     Ok(results)
+}
+
+/// Build `{ index, total, key, stage }` and hand it to `progress`.
+/// A throwing callback is logged but does not abort the batch — the
+/// JS side decides whether a progress consumer's failure should
+/// surface.
+fn emit_progress(progress: &Function, index: usize, total: u32, key: &str, stage: Stage) {
+    let stage_label = match stage {
+        Stage::Decode => "decode",
+        Stage::Frame => "frame",
+        Stage::Encode => "encode",
+    };
+    let event = Object::new();
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "index and total are bounded by JS array length; well below 2^53"
+    )]
+    let index_f = index as f64;
+    if Reflect::set(
+        &event,
+        &JsValue::from_str("index"),
+        &JsValue::from_f64(index_f),
+    )
+    .is_err()
+        || Reflect::set(
+            &event,
+            &JsValue::from_str("total"),
+            &JsValue::from_f64(f64::from(total)),
+        )
+        .is_err()
+        || Reflect::set(&event, &JsValue::from_str("key"), &JsValue::from_str(key)).is_err()
+        || Reflect::set(
+            &event,
+            &JsValue::from_str("stage"),
+            &JsValue::from_str(stage_label),
+        )
+        .is_err()
+    {
+        warn!(
+            event_id = "wasm.frame_batch.progress.event_build_failed",
+            index,
+            key,
+            stage = stage_label,
+        );
+        return;
+    }
+    if let Err(err) = progress.call1(&JsValue::NULL, &event) {
+        warn!(
+            event_id = "wasm.frame_batch.progress.callback_threw",
+            index,
+            key,
+            stage = stage_label,
+            error = ?err,
+        );
+    }
 }
 
 /// Pull `{ key, bytes }` out of one JS-side batch item. The Worker

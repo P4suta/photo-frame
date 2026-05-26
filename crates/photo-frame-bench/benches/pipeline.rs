@@ -1,3 +1,7 @@
+#![allow(
+    missing_docs,
+    reason = "divan macros expand to free fns the workspace `missing_docs` lint then flags; documenting macro-generated symbols is meaningless"
+)]
 //! Per-stage and end-to-end benches for the photo-frame pipeline.
 //!
 //! Five groups, mirroring the pipeline boundary plus a couple of
@@ -152,7 +156,8 @@ fn pipeline(bencher: Bencher<'_, '_>, fixture: &Fixture) {
     bencher
         .counter(ItemsCount::new(fixture.pixel_count()))
         .bench(|| {
-            photo_frame::pipeline(black_box(&fixture.bytes), black_box(&opts)).expect("pipeline")
+            photo_frame::pipeline(black_box(&fixture.bytes), black_box(&opts), |_| {})
+                .expect("pipeline")
         });
 }
 
@@ -171,7 +176,8 @@ fn pipeline_sns(bencher: Bencher<'_, '_>, fixture: &Fixture) {
     bencher
         .counter(ItemsCount::new(fixture.pixel_count()))
         .bench(|| {
-            photo_frame::pipeline(black_box(&fixture.bytes), black_box(&opts)).expect("pipeline")
+            photo_frame::pipeline(black_box(&fixture.bytes), black_box(&opts), |_| {})
+                .expect("pipeline")
         });
 }
 

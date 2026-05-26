@@ -9,6 +9,10 @@
     unused_qualifications,
     reason = "iai-callgrind macros generate redundant path qualification"
 )]
+#![allow(
+    missing_docs,
+    reason = "iai-callgrind macros expand to modules and free fns the workspace `missing_docs` lint then flags; documenting macro-generated symbols is meaningless"
+)]
 //! Instruction-count benches for the photo-frame pipeline.
 //!
 //! iai-callgrind drives Valgrind's `callgrind` tool to count exact

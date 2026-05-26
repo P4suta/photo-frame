@@ -49,6 +49,12 @@ export type BatchRow = {
   key: string;
   name: string;
   status: 'queued' | 'processing' | 'done' | 'error';
+  /** Cumulative pipeline progress for this item, 0..100. Only
+   * meaningful while `status === 'processing'`. */
+  percent?: number;
+  /** Last pipeline stage that finished for this item; absent before
+   * decode completes. */
+  stage?: 'decode' | 'frame' | 'encode';
   thumbnailUrl?: string;
   resultUrl?: string;
   message?: string;
@@ -249,7 +255,18 @@ export const createBatchSession = (deps: {
       if (!batchGate.isCurrent(gen)) return;
       const msg = event.data as WorkerReply;
       if (msg.kind === 'progress') {
-        setRows((rs) => rs.map((r) => (r.key === msg.key ? { ...r, status: 'processing' } : r)));
+        setRows((rs) =>
+          rs.map((r) =>
+            r.key === msg.key
+              ? {
+                  ...r,
+                  status: 'processing',
+                  percent: msg.percent,
+                  ...(msg.stage ? { stage: msg.stage } : {}),
+                }
+              : r,
+          ),
+        );
       } else if (msg.kind === 'done') {
         applyBatchResults(msg.results);
         const ok = msg.results.filter((r) => r.ok).length;

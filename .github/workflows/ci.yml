@@ -87,6 +87,15 @@ jobs:
       - name: lint
         run: just lint
 
+      # Doc surface gate — `just docs-check` runs `cargo doc` with
+      # `RUSTDOCFLAGS=-D warnings`, so missing public-item docs,
+      # broken intra-doc links, and invalid HTML all fail the job.
+      # Sits in the format-lint job rather than its own runner because
+      # the doc build reuses this job's compile cache (clippy and
+      # rustdoc share intermediate artefacts).
+      - name: docs-check
+        run: just docs-check
+
   rust-test:
     name: rust / nextest
     runs-on: ubuntu-latest

@@ -12,7 +12,7 @@
 use web_time::Instant;
 
 use crate::options::PipelineOptions;
-use crate::pipeline::{pipeline, PipelineError};
+use crate::pipeline::{pipeline, PipelineError, Stage};
 
 /// Outcome of processing one batch item.
 ///
@@ -23,8 +23,17 @@ use crate::pipeline::{pipeline, PipelineError};
 /// when results come back out of order from `rayon`).
 #[derive(Debug)]
 pub struct BatchOutcome<K> {
+    /// Caller-supplied identifier that tags this outcome (a `PathBuf` for
+    /// the CLI, a `String` for WASM). Pass-through value used to
+    /// correlate the result with the source when batches finish out of
+    /// order.
     pub key: K,
+    /// Encoded JPEG bytes on success, or the typed pipeline error on
+    /// failure.
     pub result: Result<Vec<u8>, PipelineError>,
+    /// Wall-clock duration of this single pipeline run, in milliseconds.
+    /// Captured even on failure so the caller can still record perf
+    /// telemetry.
     pub elapsed_ms: u128,
 }
 
@@ -49,9 +58,12 @@ impl<K> BatchOutcome<K> {
     skip_all,
     fields(input_bytes = bytes.len(), elapsed_ms = tracing::field::Empty),
 )]
-pub fn batch_one<K>(key: K, bytes: &[u8], opts: &PipelineOptions) -> BatchOutcome<K> {
+pub fn batch_one<K, F>(key: K, bytes: &[u8], opts: &PipelineOptions, on_stage: F) -> BatchOutcome<K>
+where
+    F: FnMut(Stage),
+{
     let started = Instant::now();
-    let result = pipeline(bytes, opts);
+    let result = pipeline(bytes, opts, on_stage);
     let elapsed_ms = started.elapsed().as_millis();
     tracing::Span::current().record("elapsed_ms", elapsed_ms);
     BatchOutcome {
@@ -78,7 +90,7 @@ mod tests {
     #[test]
     fn batch_one_returns_ok_with_jpeg_bytes() {
         let bytes = tiny_jpeg(64, 48);
-        let outcome = batch_one("photo.jpg", &bytes, &PipelineOptions::default());
+        let outcome = batch_one("photo.jpg", &bytes, &PipelineOptions::default(), |_| {});
         assert_eq!(outcome.key, "photo.jpg");
         let out = outcome.result.expect("pipeline succeeds");
         // JPEG SOI marker.
@@ -87,7 +99,7 @@ mod tests {
 
     #[test]
     fn batch_one_carries_error_through_pipeline() {
-        let outcome = batch_one(7_u32, &[], &PipelineOptions::default());
+        let outcome = batch_one(7_u32, &[], &PipelineOptions::default(), |_| {});
         assert_eq!(outcome.key, 7);
         assert!(
             outcome.result.is_err(),
@@ -102,7 +114,7 @@ mod tests {
         // we can assert the field is populated — anything from 0 ms
         // upward is acceptable.
         let bytes = tiny_jpeg(16, 16);
-        let outcome = batch_one((), &bytes, &PipelineOptions::default());
+        let outcome = batch_one((), &bytes, &PipelineOptions::default(), |_| {});
         let _ = outcome.elapsed_ms;
     }
 }

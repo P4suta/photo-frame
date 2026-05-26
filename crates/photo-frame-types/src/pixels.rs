@@ -21,10 +21,17 @@ pub enum PixelError {
              is computing buffer length consistently with the declared dimensions."
         )
     )]
+    /// The buffer is the wrong size for the declared `width × height × 4`
+    /// RGBA8 layout. Reported when the producer (decoder, raw constructor)
+    /// hands back a buffer whose length doesn't match the dimensions.
     DataSizeMismatch {
+        /// Declared image width in pixels.
         width: u32,
+        /// Declared image height in pixels.
         height: u32,
+        /// Actual byte length of the data buffer the caller supplied.
         got: usize,
+        /// Byte length the buffer was required to have: `width * height * 4`.
         expected: usize,
     },
 
@@ -37,7 +44,14 @@ pub enum PixelError {
              validation slip — check the producer."
         )
     )]
-    ZeroDimension { width: u32, height: u32 },
+    /// Either dimension is zero. A 0×0 (or 0×N, N×0) pixel grid is
+    /// meaningless; this typically signals a producer bug.
+    ZeroDimension {
+        /// Declared image width in pixels (one of `width` / `height` is zero).
+        width: u32,
+        /// Declared image height in pixels (one of `width` / `height` is zero).
+        height: u32,
+    },
 }
 
 impl Categorize for PixelError {

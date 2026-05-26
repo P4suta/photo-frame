@@ -86,6 +86,9 @@ impl fmt::Display for Category {
 /// enum implements this so downstream renderers / CLIs can ask the
 /// question generically.
 pub trait Categorize {
+    /// Bucket this value into one of the workspace-wide [`Category`]
+    /// variants. Used by the CLI to pick an exit code and by the
+    /// diagnostic renderer to colour-code severity.
     fn category(&self) -> Category;
 }
 

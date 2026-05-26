@@ -54,8 +54,8 @@ struct Cli {
     no_meta: bool,
 
     /// Frame theme (preset that pairs border colour and caption text
-    /// colour). `paper` = white frame + dark text (the v1 look),
-    /// `ink` = soft-black frame + soft-white text.
+    /// colour). `paper` = white frame + black text;
+    /// `ink` = black frame + white text.
     #[arg(long, value_enum, default_value_t = CliTheme::Paper)]
     theme: CliTheme,
 
@@ -146,10 +146,11 @@ impl From<CliTheme> for FrameTheme {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
-#[clap(rename_all = "lowercase")]
+#[clap(rename_all = "kebab-case")]
 enum CliLayout {
     Edges,
     Centered,
+    Polaroid,
 }
 
 impl From<CliLayout> for CaptionLayout {
@@ -157,6 +158,7 @@ impl From<CliLayout> for CaptionLayout {
         match value {
             CliLayout::Edges => Self::Edges,
             CliLayout::Centered => Self::Centered,
+            CliLayout::Polaroid => Self::Polaroid,
         }
     }
 }
@@ -588,7 +590,7 @@ fn process_one(input: &Path, output: &Path, opts: &PipelineOptions) -> Result<()
         path: input.display().to_string(),
         source,
     })?;
-    let framed = pipeline(&bytes, opts).wrap_err("framing")?;
+    let framed = pipeline(&bytes, opts, |_| {}).wrap_err("framing")?;
     if let Some(parent) = output.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent).map_err(|source| CliIoError::MakeDir {

@@ -1,10 +1,12 @@
-import { For, type JSX } from 'solid-js';
+import { For, Show, type JSX } from 'solid-js';
 import {
   gallery,
   galleryCard,
   galleryCardStatus,
   galleryFooter,
   galleryName,
+  galleryProgressFill,
+  galleryProgressTrack,
   galleryStatus,
   galleryThumb,
   galleryThumbImg,
@@ -28,6 +30,10 @@ export type GalleryRow = {
   key: string;
   name: string;
   status: 'queued' | 'processing' | 'done' | 'error';
+  /** Cumulative per-item pipeline progress, 0..100. Drives the
+   * progress bar that replaces the pulse animation while
+   * `status === 'processing'`. */
+  percent?: number;
   thumbnailUrl?: string;
   resultUrl?: string;
   message?: string;
@@ -58,6 +64,17 @@ export const Gallery = (props: Props): JSX.Element => (
           <div class={galleryFooter}>
             <span class={galleryStatus}>{statusLabel(row.status)}</span>
           </div>
+          <Show when={row.status === 'processing'}>
+            <div
+              class={galleryProgressTrack}
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={row.percent ?? 0}
+            >
+              <div class={galleryProgressFill} style={{ width: `${row.percent ?? 0}%` }} />
+            </div>
+          </Show>
         </li>
       )}
     </For>
