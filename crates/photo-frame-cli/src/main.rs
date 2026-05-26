@@ -8,13 +8,17 @@
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::str::FromStr;
 use std::time::{Duration, Instant};
 
+use clap::builder::PossibleValuesParser;
 use clap::{ArgAction, Parser, ValueEnum};
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use miette::{Diagnostic, Result, WrapErr};
-use photo_frame::frame::{CaptionLayout, FrameTheme, MetaPolicy};
-use photo_frame::{pipeline, Categorize, Category, PipelineError, PipelineOptions, QualityPreset};
+use photo_frame::{
+    pipeline, CaptionLayout, Categorize, Category, FrameTheme, JpegQuality, LongEdge, MetaPolicy,
+    PipelineError, PipelineOptions, PipelineSpec,
+};
 use rayon::prelude::*;
 use thiserror::Error;
 use tracing::{error, info, instrument, Level};
@@ -37,8 +41,8 @@ struct Cli {
 
     /// Quality / size bundle. Individual --quality and --max-long-edge
     /// flags override the preset's values.
-    #[arg(long, value_enum, default_value_t = CliPreset::Standard)]
-    preset: CliPreset,
+    #[arg(long, default_value = "standard", value_parser = preset_value_parser())]
+    preset: String,
 
     /// Override the preset's JPEG quality (1..=100).
     #[arg(short, long, value_parser = clap::value_parser!(u8).range(1..=100))]
@@ -46,7 +50,7 @@ struct Cli {
 
     /// Override the preset's longer-edge pixel cap. Omit to inherit the
     /// preset value (SNS = 2048, others = no cap).
-    #[arg(long, value_name = "PX")]
+    #[arg(long, value_name = "PX", value_parser = clap::value_parser!(u32).range(1..))]
     max_long_edge: Option<u32>,
 
     /// Suppress the metadata strip even if EXIF is present.
@@ -56,14 +60,15 @@ struct Cli {
     /// Frame theme (preset that pairs border colour and caption text
     /// colour). `paper` = white frame + black text;
     /// `ink` = black frame + white text.
-    #[arg(long, value_enum, default_value_t = CliTheme::Paper)]
-    theme: CliTheme,
+    #[arg(long, default_value = "paper", value_parser = theme_value_parser())]
+    theme: String,
 
     /// Caption layout. `edges` keeps the four-corner liit-style layout;
     /// `centered` joins each row with a `·` separator and centres it
-    /// under the photo.
-    #[arg(long, value_enum, default_value_t = CliLayout::Edges)]
-    layout: CliLayout,
+    /// under the photo; `polaroid` switches to the Polaroid frame
+    /// geometry with a centred caption inside the bottom band.
+    #[arg(long, default_value = "edges", value_parser = layout_value_parser())]
+    layout: String,
 
     /// Maximum number of inputs to process in parallel. Defaults to the
     /// number of logical CPUs (clamped to the input count). Use
@@ -106,6 +111,23 @@ struct Cli {
     profile_trace: Option<PathBuf>,
 }
 
+/// Build a `PossibleValuesParser` enumerating every named preset
+/// straight from `PipelineSpec::PRESETS`. Single source of truth for
+/// `--preset`'s `--help` listing and tab-completion.
+fn preset_value_parser() -> PossibleValuesParser {
+    PossibleValuesParser::new(PipelineSpec::PRESETS.iter().map(|(label, _)| *label))
+}
+
+/// Build a `PossibleValuesParser` enumerating every `FrameTheme` label.
+fn theme_value_parser() -> PossibleValuesParser {
+    PossibleValuesParser::new(FrameTheme::ALL.iter().map(|v| v.label()))
+}
+
+/// Build a `PossibleValuesParser` enumerating every `CaptionLayout` label.
+fn layout_value_parser() -> PossibleValuesParser {
+    PossibleValuesParser::new(CaptionLayout::ALL.iter().map(|v| v.label()))
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 #[clap(rename_all = "lowercase")]
 enum LogFormat {
@@ -114,96 +136,47 @@ enum LogFormat {
     Json,
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
-#[clap(rename_all = "lowercase")]
-enum CliPreset {
-    /// Optimised for SNS upload: small file, long edge ≤ 2048 px.
-    Sns,
-    /// Balanced default. No downscale.
-    Standard,
-    /// Highest quality, no downscale.
-    Maximum,
-}
-
-/// CLI-facing alias for [`FrameTheme`] — clap value-enum needs to own
-/// the type it parses into. We could `impl ValueEnum for FrameTheme`
-/// in the library, but that drags clap into the library crate; an
-/// adapter enum here keeps the lib clean.
-#[derive(Debug, Clone, Copy, ValueEnum)]
-#[clap(rename_all = "lowercase")]
-enum CliTheme {
-    Paper,
-    Ink,
-}
-
-impl From<CliTheme> for FrameTheme {
-    fn from(value: CliTheme) -> Self {
-        match value {
-            CliTheme::Paper => Self::Paper,
-            CliTheme::Ink => Self::Ink,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-#[clap(rename_all = "kebab-case")]
-enum CliLayout {
-    Edges,
-    Centered,
-    Polaroid,
-}
-
-impl From<CliLayout> for CaptionLayout {
-    fn from(value: CliLayout) -> Self {
-        match value {
-            CliLayout::Edges => Self::Edges,
-            CliLayout::Centered => Self::Centered,
-            CliLayout::Polaroid => Self::Polaroid,
-        }
-    }
-}
-
-impl From<CliPreset> for QualityPreset {
-    fn from(value: CliPreset) -> Self {
-        match value {
-            CliPreset::Sns => Self::Sns,
-            CliPreset::Standard => Self::Standard,
-            CliPreset::Maximum => Self::Maximum,
-        }
-    }
-}
-
 /// CLI-side file I/O errors. The pipeline crate doesn't see the
 /// filesystem, so a missing input / unwritable output surfaces here.
 /// Categorising as Input keeps the exit code shell-script friendly.
 #[derive(Debug, Error, Diagnostic)]
 enum CliIoError {
+    /// Could not read an input file. Surfaces a path the user can
+    /// inspect with `ls`/`stat`.
     #[error("could not read input file: {path}")]
     #[diagnostic(
         code(photo_frame::cli::io::read),
         help("Check the path exists and is readable by the current user.")
     )]
     ReadInput {
+        /// Display string of the path that failed to read.
         path: String,
+        /// Underlying `std::io::Error` so `miette` can format the chain.
         #[source]
         source: std::io::Error,
     },
 
+    /// Could not write an output file. Surfaces the path that failed.
     #[error("could not write output file: {path}")]
     #[diagnostic(
         code(photo_frame::cli::io::write),
         help("Check the parent directory exists and is writable.")
     )]
     WriteOutput {
+        /// Display string of the path that failed to write.
         path: String,
+        /// Underlying `std::io::Error` so `miette` can format the chain.
         #[source]
         source: std::io::Error,
     },
 
+    /// Could not create an output directory. Surfaces the directory path.
     #[error("could not create output directory: {path}")]
     #[diagnostic(code(photo_frame::cli::io::mkdir))]
     MakeDir {
+        /// Display string of the directory we tried to create.
         path: String,
+        /// Underlying `std::io::Error`.
         #[source]
         source: std::io::Error,
     },
@@ -299,7 +272,7 @@ fn install_panic_hook() {
     skip_all,
     fields(
         inputs = cli.inputs.len(),
-        preset = ?cli.preset,
+        preset = %cli.preset,
         jobs = tracing::field::Empty,
         strict = cli.strict,
     ),
@@ -561,27 +534,37 @@ fn first_error_category(result: &Result<()>) -> Option<Category> {
     None
 }
 
-/// Materialise [`PipelineOptions`] from the parsed CLI. Preset supplies
-/// the baseline; individual flags layer on top of it.
+/// Materialise [`PipelineOptions`] from the parsed CLI. Every label
+/// flag (`--preset` / `--theme` / `--layout`) has already been
+/// `PossibleValuesParser`-gated by clap, so `FromStr` cannot fail —
+/// any panic here would mean clap and the types layer disagreed about
+/// the canonical label set, which is a programmer bug worth a loud
+/// failure.
 fn build_options(cli: &Cli) -> PipelineOptions {
-    let preset: QualityPreset = cli.preset.into();
-    let mut opts = PipelineOptions::from_preset(preset);
+    let base = PipelineSpec::from_str(&cli.preset)
+        .expect("clap's PossibleValuesParser gates --preset against PipelineSpec::PRESETS");
+    let theme = FrameTheme::from_str(&cli.theme)
+        .expect("clap's PossibleValuesParser gates --theme against FrameTheme::ALL");
+    let layout = CaptionLayout::from_str(&cli.layout)
+        .expect("clap's PossibleValuesParser gates --layout against CaptionLayout::ALL");
+
+    let mut spec = base.with_theme(theme).with_layout(layout);
+    if cli.no_meta {
+        spec = spec.with_meta_policy(MetaPolicy::Never);
+    }
     if let Some(q) = cli.quality {
-        opts.jpeg.quality = q;
+        // clap validated 1..=100 — the JpegQuality::new contract holds.
+        let q =
+            JpegQuality::new(q).expect("clap's `range(1..=100)` matches JpegQuality's invariant");
+        spec = spec.with_jpeg_quality(q);
     }
-    // `cli.max_long_edge` being `Some(_)` is the *user-explicitly-asked*
-    // signal; `None` means "inherit from preset", which we already did.
-    if cli.max_long_edge.is_some() {
-        opts.frame.max_long_edge = cli.max_long_edge;
+    if let Some(edge) = cli.max_long_edge {
+        // clap validated `range(1..)` — LongEdge::new requires non-zero.
+        let edge =
+            LongEdge::new(edge).expect("clap's `range(1..)` matches LongEdge's non-zero invariant");
+        spec = spec.with_max_long_edge(Some(edge));
     }
-    opts.frame.theme = cli.theme.into();
-    opts.frame.layout = cli.layout.into();
-    opts.frame.meta_policy = if cli.no_meta {
-        MetaPolicy::Never
-    } else {
-        MetaPolicy::Auto
-    };
-    opts
+    PipelineOptions::from_spec(spec)
 }
 
 #[instrument(skip(opts), fields(input = %input.display(), output = %output.display()))]
@@ -712,10 +695,9 @@ fn is_existing_dir(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_options, exit_code_for, Cli, CliPreset};
+    use super::{build_options, exit_code_for, Cli};
     use clap::Parser;
-    use photo_frame::frame::{CaptionLayout, FrameTheme};
-    use photo_frame::{DecodeError, PipelineError, QualityPreset};
+    use photo_frame::{CaptionLayout, DecodeError, FrameTheme, PipelineError};
 
     #[test]
     fn theme_defaults_to_paper() {
@@ -729,6 +711,12 @@ mod tests {
         let cli = Cli::try_parse_from(["photo-frame", "--theme", "ink", "photo.jpg"]).unwrap();
         let opts = build_options(&cli);
         assert_eq!(opts.frame.theme, FrameTheme::Ink);
+    }
+
+    #[test]
+    fn theme_rejects_unknown_label_at_parse_time() {
+        let err = Cli::try_parse_from(["photo-frame", "--theme", "midnight", "photo.jpg"]);
+        assert!(err.is_err(), "clap should reject unknown theme labels");
     }
 
     #[test]
@@ -754,11 +742,7 @@ mod tests {
     }
 
     #[test]
-    fn exit_code_for_decode_failure_is_3() {
-        // simulate a decode failure (Category::Decode → 3). Use a
-        // fabricated image::ImageError indirectly: the cleanest way is
-        // an UnknownFormat (Input → 2) vs HeifFeatureDisabled (also
-        // Input → 2), then PixelError → Internal → 1.
+    fn exit_code_for_decode_failure_is_input() {
         assert_eq!(
             exit_code_for(&PipelineError::Decode(DecodeError::UnknownFormat)),
             2,
@@ -767,22 +751,6 @@ mod tests {
             exit_code_for(&PipelineError::Decode(DecodeError::HeifFeatureDisabled)),
             2,
         );
-    }
-
-    #[test]
-    fn cli_preset_maps_to_facade_preset() {
-        assert!(matches!(
-            QualityPreset::from(CliPreset::Sns),
-            QualityPreset::Sns
-        ));
-        assert!(matches!(
-            QualityPreset::from(CliPreset::Standard),
-            QualityPreset::Standard
-        ));
-        assert!(matches!(
-            QualityPreset::from(CliPreset::Maximum),
-            QualityPreset::Maximum
-        ));
     }
 
     #[test]
@@ -810,6 +778,12 @@ mod tests {
     }
 
     #[test]
+    fn unknown_preset_label_rejected_at_parse_time() {
+        let err = Cli::try_parse_from(["photo-frame", "--preset", "fancy", "photo.jpg"]);
+        assert!(err.is_err(), "clap should reject unknown preset labels");
+    }
+
+    #[test]
     fn explicit_quality_overrides_preset() {
         let cli = Cli::try_parse_from(["photo-frame", "--preset", "sns", "-q", "95", "photo.jpg"])
             .unwrap();
@@ -833,5 +807,13 @@ mod tests {
         let opts = build_options(&cli);
         assert_eq!(opts.frame.max_long_edge, Some(3000));
         assert_eq!(opts.jpeg.quality, 98);
+    }
+
+    #[test]
+    fn no_meta_flag_forces_meta_policy_never() {
+        use photo_frame::MetaPolicy;
+        let cli = Cli::try_parse_from(["photo-frame", "--no-meta", "photo.jpg"]).unwrap();
+        let opts = build_options(&cli);
+        assert_eq!(opts.frame.meta_policy, MetaPolicy::Never);
     }
 }

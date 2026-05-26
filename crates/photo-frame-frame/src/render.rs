@@ -9,7 +9,7 @@ use rayon::prelude::*;
 use crate::format::{caption_from, Caption};
 use crate::geometry::{self, Composition, LayoutStyle, MetaLayout};
 use crate::num::round_to_u32;
-use crate::options::{CaptionLayout, FrameOptions, MetaPolicy};
+use crate::options::{to_image_rgba, CaptionLayout, FrameOptions, MetaPolicy};
 use crate::text::{Renderer, Weight};
 
 #[tracing::instrument(
@@ -113,7 +113,7 @@ fn compose_canvas(
     let mut canvas = build_canvas_with_photo(canvas_w, canvas_h, photo, composition, opts);
 
     if let Some(ml) = composition.meta.as_ref() {
-        let renderer = Renderer::new(opts.theme.ink());
+        let renderer = Renderer::new(to_image_rgba(opts.theme.ink()));
         let photo_w = composition.photo_size.0;
         let metrics = fit_caption(&renderer, caption, opts.layout, ml, photo_w);
         match opts.layout {
@@ -145,8 +145,7 @@ fn build_canvas_with_photo(
     composition: &Composition,
     opts: &FrameOptions,
 ) -> RgbaImage {
-    let bg = opts.theme.background();
-    let bg_bytes = bg.0;
+    let bg_bytes = opts.theme.background().to_array();
     let canvas_stride = (canvas_w as usize) * 4;
     let total_bytes = (canvas_h as usize) * canvas_stride;
 

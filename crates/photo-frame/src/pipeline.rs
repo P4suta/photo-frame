@@ -86,7 +86,7 @@ mod tests {
     use image::{
         codecs::jpeg::JpegEncoder, ExtendedColorType, ImageEncoder, ImageReader, RgbImage,
     };
-    use photo_frame_types::QualityPreset;
+    use photo_frame_types::PipelineSpec;
     use std::io::Cursor;
 
     fn tiny_jpeg(w: u32, h: u32) -> Vec<u8> {
@@ -161,7 +161,7 @@ mod tests {
         let input = tiny_jpeg(4000, 3000);
         let out = pipeline(
             &input,
-            &PipelineOptions::from_preset(QualityPreset::Sns),
+            &PipelineOptions::from_spec(PipelineSpec::SNS),
             |_| {},
         )
         .expect("pipeline");

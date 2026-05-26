@@ -183,9 +183,48 @@ impl Dimensions {
     }
 }
 
+/// An 8-bit RGBA colour, with the same packed `[u8; 4]` byte order
+/// (`[red, green, blue, alpha]`) used by every renderer downstream.
+///
+/// Kept as a value type — there is no construction-time invariant beyond
+/// "four bytes" — so it stays a thin vocabulary item that other crates
+/// can convert into their own colour types (`image::Rgba`, CSS strings,
+/// canvas paint settings) without dragging `image` into `photo-frame-types`.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Rgba8 {
+    /// Red channel, 0..=255.
+    pub r: u8,
+    /// Green channel, 0..=255.
+    pub g: u8,
+    /// Blue channel, 0..=255.
+    pub b: u8,
+    /// Alpha channel, 0..=255 (`255` = fully opaque).
+    pub a: u8,
+}
+
+impl Rgba8 {
+    /// Construct from explicit channel values.
+    #[must_use]
+    pub const fn new(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Self { r, g, b, a }
+    }
+
+    /// Pure-opaque white (`[255, 255, 255, 255]`).
+    pub const WHITE: Self = Self::new(255, 255, 255, 255);
+    /// Pure-opaque black (`[0, 0, 0, 255]`).
+    pub const BLACK: Self = Self::new(0, 0, 0, 255);
+
+    /// Return the colour as a `[u8; 4]` in RGBA byte order — convenient
+    /// for the boundary with `image::Rgba` and similar APIs.
+    #[must_use]
+    pub const fn to_array(self) -> [u8; 4] {
+        [self.r, self.g, self.b, self.a]
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Dimensions, ExifString, Fnumber, IsoSensitivity, JpegQuality, LongEdge};
+    use super::{Dimensions, ExifString, Fnumber, IsoSensitivity, JpegQuality, LongEdge, Rgba8};
 
     #[test]
     fn jpeg_quality_accepts_canonical_range() {
@@ -260,5 +299,17 @@ mod tests {
     fn dimensions_rgba8_byte_count_matches_geometry() {
         let d = Dimensions::new(4, 3).expect("non-zero");
         assert_eq!(d.rgba8_bytes(), 4 * 3 * 4);
+    }
+
+    #[test]
+    fn rgba8_to_array_matches_construction() {
+        let c = Rgba8::new(10, 20, 30, 40);
+        assert_eq!(c.to_array(), [10, 20, 30, 40]);
+    }
+
+    #[test]
+    fn rgba8_predefined_palette_matches_pure_values() {
+        assert_eq!(Rgba8::WHITE.to_array(), [255, 255, 255, 255]);
+        assert_eq!(Rgba8::BLACK.to_array(), [0, 0, 0, 255]);
     }
 }

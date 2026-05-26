@@ -32,8 +32,9 @@ pub use photo_frame_types as types;
 pub use photo_frame_decode::DecodeError;
 pub use photo_frame_encode::EncodeError;
 pub use photo_frame_types::{
-    Camera, Categorize, Category, DateTime, Exposure, Lens, Photograph, PixelError, Pixels,
-    Provenance, QualityPreset, Stage, StageEvent,
+    Camera, CaptionLayout, Categorize, Category, DateTime, Dimensions, ExifString, Exposure,
+    Fnumber, FrameTheme, IsoSensitivity, JpegQuality, Lens, LongEdge, MetaPolicy, Photograph,
+    PipelineSpec, PixelError, Pixels, Provenance, Rgba8, Stage, StageEvent,
 };
 
 pub use crate::batch::{batch_one, BatchOutcome};

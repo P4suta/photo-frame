@@ -172,7 +172,7 @@ fn pipeline(bencher: Bencher<'_, '_>, fixture: &Fixture) {
 
 #[divan::bench(args = fixtures::all())]
 fn pipeline_sns(bencher: Bencher<'_, '_>, fixture: &Fixture) {
-    let opts = photo_frame::PipelineOptions::from_preset(photo_frame::QualityPreset::Sns);
+    let opts = photo_frame::PipelineOptions::from_spec(photo_frame::PipelineSpec::SNS);
     bencher
         .counter(ItemsCount::new(fixture.pixel_count()))
         .bench(|| {
