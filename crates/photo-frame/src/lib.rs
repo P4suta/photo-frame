@@ -33,9 +33,9 @@ pub use photo_frame_decode::DecodeError;
 pub use photo_frame_encode::EncodeError;
 pub use photo_frame_types::{
     Camera, CaptionLayout, Categorize, Category, DateTime, Dimensions, ExifString, Exposure,
-    Fnumber, FocalLengthMm, FrameTheme, IsoSensitivity, JpegQuality, Lens, LongEdge, MetaPolicy,
-    Photograph, PipelineSpec, PixelError, Pixels, Provenance, Rgba8, ShutterSeconds, Stage,
-    StageEvent,
+    Fnumber, FocalLengthMm, FrameStyle, FrameTheme, IsoSensitivity, JpegQuality, Lens, LongEdge,
+    MetaPolicy, Photograph, PipelineSpec, PixelError, Pixels, Preset, Provenance, Rgba8,
+    ShutterSeconds, Stage, StageEvent,
 };
 
 pub use crate::batch::{batch_one, BatchOutcome};

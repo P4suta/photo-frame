@@ -10,13 +10,13 @@
  * Protocol (every reply carries the same `requestId` the request did, so
  * the main side can ignore stale replies after a fast slider drag):
  *
- *   request:  { kind: 'prepare', requestId, bytes, frameOptions }
+ *   request:  { kind: 'prepare', requestId, bytes, spec }
  *   reply:    { kind: 'prepared', requestId, rgba, width, height }
  *
  *   request:  { kind: 'encode',  requestId, rgba, width, height, quality }
  *   reply:    { kind: 'encoded', requestId, jpeg }
  *
- *   request:  { kind: 'batch',   items, options }   (no requestId — atomic)
+ *   request:  { kind: 'batch',   items, spec }   (no requestId — atomic)
  *   reply 1+: { kind: 'progress', index, total, key }
  *   reply:    { kind: 'done',     results }
  *
@@ -32,11 +32,11 @@ import init, {
   encode_jpeg,
   frame_batch,
   initThreadPool,
+  type PipelineSpec,
   render_pixels,
   type Stage,
   type StageEvent,
 } from '../pkg/photo_frame_wasm.js';
-import type { FrameOptionsForPrepare, PipelineOptions } from './frame-client';
 
 export type BatchItem = {
   key: string;
@@ -61,7 +61,7 @@ export type PrepareRequest = {
   kind: 'prepare';
   requestId: number;
   bytes: Uint8Array;
-  frameOptions: FrameOptionsForPrepare;
+  spec: PipelineSpec;
 };
 export type EncodeRequest = {
   kind: 'encode';
@@ -74,7 +74,7 @@ export type EncodeRequest = {
 export type BatchRequest = {
   kind: 'batch';
   items: BatchItem[];
-  options: PipelineOptions;
+  spec: PipelineSpec;
 };
 export type WorkerRequest = PrepareRequest | EncodeRequest | BatchRequest;
 
@@ -165,7 +165,7 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
   switch (req.kind) {
     case 'prepare': {
       try {
-        const out = render_pixels(req.bytes, req.frameOptions) as {
+        const out = render_pixels(req.bytes, req.spec) as {
           rgba: Uint8Array;
           width: number;
           height: number;
@@ -227,7 +227,7 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
             percent: 0,
           });
         }
-        const raw = frame_batch(req.items, req.options, onStage) as unknown as BatchResult[];
+        const raw = frame_batch(req.items, req.spec, onStage) as unknown as BatchResult[];
         post({ kind: 'done', results: raw });
       } catch (error) {
         post({ kind: 'error', requestId: null, message: errorMessage(error) });

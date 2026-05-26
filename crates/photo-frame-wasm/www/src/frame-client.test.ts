@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from 'vitest';
-import { _encodeJpegOn, _preparePixelsOn, type FrameOptionsForPrepare } from './frame-client';
+import { _encodeJpegOn, _preparePixelsOn, type PipelineSpec } from './frame-client';
 import type { MessageTarget } from './lib/worker-channel';
 
 // ── fake MessageTarget ─────────────────────────────────────────
@@ -36,27 +36,32 @@ const createFakeTarget = (): MessageTarget & {
   };
 };
 
+const sampleSpec = (overrides: Partial<PipelineSpec> = {}): PipelineSpec => ({
+  frame_style: 'standard',
+  theme: 'paper',
+  layout: 'edges',
+  meta_policy: 'auto',
+  jpeg_quality: 92,
+  max_long_edge: 1920,
+  ...overrides,
+});
+
 describe('_preparePixelsOn', () => {
-  test('posts a prepare request with the framed options and a sliced byte buffer', () => {
+  test('posts a prepare request with the canonical spec and a sliced byte buffer', () => {
     const target = createFakeTarget();
     const bytes = new Uint8Array([1, 2, 3, 4]);
-    const options: FrameOptionsForPrepare = {
-      theme: 'paper',
-      layout: 'edges',
-      show_meta: true,
-      max_long_edge: 1920,
-    };
-    void _preparePixelsOn(target, 42, bytes, options);
+    const spec = sampleSpec();
+    void _preparePixelsOn(target, 42, bytes, spec);
     expect(target.sent).toHaveLength(1);
     const sent = target.sent[0]?.message as {
       kind: string;
       requestId: number;
       bytes: Uint8Array;
-      frameOptions: FrameOptionsForPrepare;
+      spec: PipelineSpec;
     };
     expect(sent.kind).toBe('prepare');
     expect(sent.requestId).toBe(42);
-    expect(sent.frameOptions).toEqual(options);
+    expect(sent.spec).toEqual(spec);
     expect(Array.from(sent.bytes)).toEqual([1, 2, 3, 4]);
     // The byte buffer must be a fresh slice — never the caller's,
     // otherwise the transferable would detach a buffer the caller
@@ -67,12 +72,12 @@ describe('_preparePixelsOn', () => {
 
   test('resolves with the rgba/width/height payload from a matching prepared reply', async () => {
     const target = createFakeTarget();
-    const promise = _preparePixelsOn(target, 1, new Uint8Array([0]), {
-      theme: 'ink',
-      layout: 'centered',
-      show_meta: false,
-      max_long_edge: null,
-    });
+    const promise = _preparePixelsOn(
+      target,
+      1,
+      new Uint8Array([0]),
+      sampleSpec({ theme: 'ink', layout: 'centered', meta_policy: 'never', max_long_edge: null }),
+    );
     const rgba = new Uint8Array([255, 0, 0, 255]);
     target.respond({ kind: 'prepared', requestId: 1, rgba, width: 1, height: 1 });
     await expect(promise).resolves.toEqual({ rgba, width: 1, height: 1 });
@@ -80,12 +85,7 @@ describe('_preparePixelsOn', () => {
 
   test('rejects with the worker error message on a matching error reply', async () => {
     const target = createFakeTarget();
-    const promise = _preparePixelsOn(target, 7, new Uint8Array([0]), {
-      theme: 'paper',
-      layout: 'edges',
-      show_meta: true,
-      max_long_edge: null,
-    });
+    const promise = _preparePixelsOn(target, 7, new Uint8Array([0]), sampleSpec());
     target.respond({ kind: 'error', requestId: 7, message: 'decode failed' });
     await expect(promise).rejects.toThrow('decode failed');
   });

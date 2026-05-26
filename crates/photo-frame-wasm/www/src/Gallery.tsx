@@ -16,25 +16,34 @@ import { statusLabel } from './lib/format';
 
 /**
  * Per-row state the gallery renders. Mirrors `BatchRow` in
- * `App.tsx` but is parameterised here so this component stays
- * unaware of the larger session lifecycle (single mode, status
- * line, etc.).
+ * `state/batch-session.ts` but is parameterised here so this
+ * component stays unaware of the larger session lifecycle (single
+ * mode, status line, the depth-2 thumbnail cache, etc.).
  *
- * `thumbnailUrl` is the low-resolution framed preview shown
- * while the row sits queued or processing. `resultUrl` is the
- * full-resolution framed JPEG used by the sidebar's "Download
- * all" affordance; the gallery itself is passive — display
- * only, no per-card download button.
+ * `thumb.url` is the low-resolution framed preview shown while
+ * the row sits queued or processing — the session owns its
+ * lifetime via a per-row depth-2 LRU cache, so it's safe to assume
+ * the URL stays valid for the entire interval it sits on the row.
+ * `resultUrl` is the full-resolution framed JPEG used by the
+ * sidebar's "Download all" affordance; the gallery itself is
+ * passive — display only, no per-card download button.
+ *
+ * `transitionName` is the stable `view-transition-name` for this
+ * row's `<img>` so the View Transitions API can match the same
+ * element across renders and animate per-row crossfades
+ * independently (concurrent transitions with distinct names
+ * don't conflict).
  */
 export type GalleryRow = {
   key: string;
   name: string;
+  transitionName: string;
   status: 'queued' | 'processing' | 'done' | 'error';
   /** Cumulative per-item pipeline progress, 0..100. Drives the
    * progress bar that replaces the pulse animation while
    * `status === 'processing'`. */
   percent?: number;
-  thumbnailUrl?: string;
+  thumb?: { url: string };
   resultUrl?: string;
   message?: string;
 };
@@ -52,8 +61,19 @@ export const Gallery = (props: Props): JSX.Element => (
       {(row) => (
         <li class={`${galleryCard} ${galleryCardStatus}`} data-status={row.status}>
           <div class={`${galleryThumb} gallery-thumb`}>
-            {row.thumbnailUrl ? (
-              <img class={galleryThumbImg} src={row.thumbnailUrl} alt="" />
+            {row.thumb ? (
+              // `view-transition-name` lives inline because Panda's
+              // static-extraction can't templatise per-row idents.
+              // Each row's `<img>` becomes its own View Transition
+              // pseudo-element on the next swap, so the session's
+              // depth-2 cache rotation crossfades GPU-side instead
+              // of hard-cutting.
+              <img
+                class={galleryThumbImg}
+                src={row.thumb.url}
+                alt=""
+                style={{ 'view-transition-name': row.transitionName }}
+              />
             ) : (
               <div class={galleryThumbPlaceholder} />
             )}

@@ -7,7 +7,11 @@
  *   - **Thumbnail pass** — debounced framed-preview thumbnails for
  *     every batch row, regenerated whenever `files` or the render
  *     settings change. Sequential through the worker so WASM's
- *     decode cache amortises the cost.
+ *     decode cache amortises the cost. Per-row depth-2 cache
+ *     (current + previous) makes the typical "toggle a setting,
+ *     then toggle back" round-trip instant (no worker re-call) and
+ *     keeps the stale-while-revalidate UX — the gallery never
+ *     blanks while a new variant is in flight.
  *   - **Full-resolution encode pass** — the heavy batch work, fired
  *     as a tail-call from the thumbnail pass so the worker queue
  *     runs thumb → full in that order (without this the user
@@ -16,9 +20,17 @@
  *
  * Both flights are gated by `createGenerationGate()` so a settings
  * change or a new batch drop invalidates in-flight replies before
- * they can write into the wrong row. Per-row `thumbnailUrl` and
- * `resultUrl` blob URLs are owned here too and revoked on every
- * regenerate / dispose path.
+ * they can write into the wrong row. Per-row thumbnail and
+ * `resultUrl` blob URLs are owned here too and revoked at the
+ * appropriate lifecycle moment (LRU evict, file-set swap, dispose).
+ *
+ * Every per-row swap of the visible thumbnail is wrapped in the
+ * View Transitions API helper (`lib/view-transition.ts`) so the
+ * crossfade is GPU-composited rather than a hard cut. The
+ * `transitionName` field on each row gives the API a stable
+ * identity to match snapshots across renders, and crucially it
+ * scopes the animation to *that* `<img>` so concurrent per-row
+ * transitions don't conflict.
  */
 
 import { downloadZip } from 'client-zip';
@@ -35,19 +47,31 @@ import type { DroppedFile } from '../DropZone';
 import type {
   BatchItem,
   BatchResult,
-  FrameOptionsForPrepare,
+  PipelineSpec,
   WorkerReply,
   WorkerRequest,
 } from '../frame-client';
 import { generateThumbnailBlob } from '../frame-client';
 import { createGenerationGate } from '../lib/batch-sequencer';
 import { framedName, uint8ToBuffer } from '../lib/format';
+import { variantKey, type VariantKey } from '../lib/variants';
+import { withViewTransition } from '../lib/view-transition';
 import type { MessageTarget } from '../lib/worker-channel';
 import type { AppSettings } from './app-settings';
+
+/** One depth of the per-row thumbnail cache. `key` records the
+ *  spec the URL was generated under, so the cache lookup can ask
+ *  "is this the variant the user just asked for?". */
+type CachedThumb = { url: string; key: VariantKey };
 
 export type BatchRow = {
   key: string;
   name: string;
+  /** Stable identifier for the per-row View Transition. Set once
+   *  at row creation and never reassigned; the View Transitions
+   *  API uses it to match the same `<img>` element across
+   *  renders so concurrent per-row crossfades don't conflict. */
+  transitionName: string;
   status: 'queued' | 'processing' | 'done' | 'error';
   /** Cumulative pipeline progress for this item, 0..100. Only
    * meaningful while `status === 'processing'`. */
@@ -55,7 +79,13 @@ export type BatchRow = {
   /** Last pipeline stage that finished for this item; absent before
    * decode completes. */
   stage?: 'decode' | 'frame' | 'encode';
-  thumbnailUrl?: string;
+  /** Active thumbnail (what the gallery displays). `undefined`
+   *  only until the first regenerate finishes. */
+  thumb?: CachedThumb;
+  /** Previous thumbnail kept around for one generation so a
+   *  toggle-back to the prior spec is instant (no worker round-
+   *  trip). Evicted + revoked when a *new* spec lands. */
+  prevThumb?: CachedThumb;
   resultUrl?: string;
   message?: string;
 };
@@ -67,9 +97,16 @@ export type BatchRow = {
 // displays without paying for full-resolution frame composition.
 const THUMBNAIL_LONG_EDGE = 480;
 // Debounce window for thumbnail regeneration on theme/layout/
-// show_meta toggles. The user often drags through preset states
+// meta-policy toggles. The user often drags through preset states
 // before settling.
 const THUMBNAIL_DEBOUNCE_MS = 320;
+
+/** Project the user's full `PipelineSpec` onto the subset of
+ *  fields that actually affect a thumbnail's pixels. The
+ *  thumbnail pass always uses `THUMBNAIL_LONG_EDGE` and a fixed
+ *  quality, so neither contributes to the cache identity. */
+const thumbnailKey = (spec: PipelineSpec): VariantKey =>
+  variantKey(spec.frame_style, spec.theme, spec.layout, spec.meta_policy);
 
 export type BatchSession = {
   state: {
@@ -107,7 +144,8 @@ export const createBatchSession = (deps: {
   // ── row lifecycle ────────────────────────────────────────────────
   const revokeAllUrls = (): void => {
     for (const row of rows()) {
-      if (row.thumbnailUrl) URL.revokeObjectURL(row.thumbnailUrl);
+      if (row.thumb) URL.revokeObjectURL(row.thumb.url);
+      if (row.prevThumb) URL.revokeObjectURL(row.prevThumb.url);
       if (row.resultUrl) URL.revokeObjectURL(row.resultUrl);
     }
   };
@@ -121,16 +159,27 @@ export const createBatchSession = (deps: {
   // otherwise the Gallery would briefly render with `rows = []`
   // between `setBatchFiles(...)` and the next microtask, flashing
   // empty before the queued placeholders appear.
+  //
+  // File-set transitions are also URL-lifecycle boundaries: every
+  // thumbnail (current + previous) and `resultUrl` the previous
+  // batch owned becomes unreachable when we replace `rows`, so
+  // revoke them up-front to keep the blob registry from growing
+  // across drop-and-redrop cycles.
   createRenderEffect(
     on(deps.files, (files) => {
+      revokeAllUrls();
       if (!files) {
         setRows([]);
         return;
       }
       setRows(
-        files.map((f) => ({
+        files.map((f, idx) => ({
           key: f.name,
           name: f.name,
+          // `gallery-thumb-${idx}` is a fresh CSS ident per row
+          // and stays valid across re-renders because batch rows
+          // never reorder (sorted by drop order at this point).
+          transitionName: `gallery-thumb-${idx}`,
           status: 'queued' as const,
         })),
       );
@@ -147,23 +196,18 @@ export const createBatchSession = (deps: {
       () => {
         const files = deps.files();
         if (!files) return null;
-        return {
-          files,
-          theme: deps.settings.theme(),
-          layout: deps.settings.layout(),
-          showMeta: deps.settings.showMeta(),
-        };
+        // Build a thumbnail spec from the user's current frame
+        // settings; `generateThumbnailBlob` overrides
+        // `max_long_edge` (and the JPEG quality) to the thumbnail
+        // pass values.
+        return { files, spec: deps.settings.buildSpec(null) };
       },
       (scope) => {
         if (thumbnailDebounce !== null) clearTimeout(thumbnailDebounce);
         if (!scope) return;
         thumbnailDebounce = setTimeout(() => {
           thumbnailDebounce = null;
-          void regenerateBatchThumbnails(scope.files, {
-            theme: scope.theme,
-            layout: scope.layout,
-            show_meta: scope.showMeta,
-          });
+          void regenerateBatchThumbnails(scope.files, scope.spec);
         }, THUMBNAIL_DEBOUNCE_MS);
       },
     ),
@@ -171,43 +215,96 @@ export const createBatchSession = (deps: {
 
   const regenerateBatchThumbnails = async (
     files: DroppedFile[],
-    options: Omit<FrameOptionsForPrepare, 'max_long_edge'>,
+    baseSpec: PipelineSpec,
   ): Promise<void> => {
     const gen = thumbnailGate.bump();
-    // Revoke previous thumbnails and clear the field on every row
-    // so the gallery shows pulsing placeholders again immediately.
-    setRows((rs) => {
-      for (const r of rs) {
-        if (r.thumbnailUrl) URL.revokeObjectURL(r.thumbnailUrl);
+    const newKey = thumbnailKey(baseSpec);
+
+    // Phase 1 (sync): classify each row against the cache.
+    //   - Already-current: no work.
+    //   - Toggle-back hit: prevThumb matches the new key — record
+    //     the row for a same-tick swap.
+    //   - Cache miss: queue the file for sequential regen below.
+    //
+    // The classification runs OUTSIDE `withViewTransition` because
+    // `document.startViewTransition` defers its callback to the
+    // next rendering tick. If we built `toRegen` inside that
+    // callback, the for-loop below would see an empty list and
+    // bail before any thumbnail got generated. The cache-hit
+    // swap is wrapped separately so the cache-hit case still
+    // animates as a GPU crossfade per row.
+    const toRegen: DroppedFile[] = [];
+    const swapTargets = new Set<string>();
+    for (const r of rows()) {
+      const f = files.find((file) => file.name === r.key);
+      if (!f) continue;
+      if (r.thumb && r.thumb.key === newKey) continue;
+      if (r.prevThumb && r.prevThumb.key === newKey) {
+        swapTargets.add(r.key);
+        continue;
       }
-      // Destructure to *omit* `thumbnailUrl` rather than set it to
-      // `undefined` — `exactOptionalPropertyTypes` is on in
-      // tsconfig, so the two aren't interchangeable.
-      return rs.map(({ thumbnailUrl: _, ...rest }) => rest);
-    });
-    for (const file of files) {
-      if (!thumbnailGate.isCurrent(gen)) return;
-      try {
-        const blob = await generateThumbnailBlob(file.data, options, THUMBNAIL_LONG_EDGE);
-        if (!thumbnailGate.isCurrent(gen)) return;
-        const url = URL.createObjectURL(blob);
+      toRegen.push(f);
+    }
+
+    if (swapTargets.size > 0) {
+      withViewTransition(() => {
         setRows((rs) =>
           rs.map((r) => {
-            if (r.key !== file.name) return r;
-            if (r.thumbnailUrl && !thumbnailGate.isCurrent(gen)) {
-              URL.revokeObjectURL(url);
-              return r;
-            }
-            if (r.thumbnailUrl) URL.revokeObjectURL(r.thumbnailUrl);
-            return { ...r, thumbnailUrl: url };
+            if (!swapTargets.has(r.key) || !r.prevThumb) return r;
+            // Swap the two depth-2 layers — both stay alive, just
+            // their roles flip. The newly-promoted layer becomes
+            // visible; the demoted layer waits in `prevThumb` for
+            // the next toggle-back.
+            return {
+              ...r,
+              thumb: r.prevThumb,
+              ...(r.thumb ? { prevThumb: r.thumb } : {}),
+            };
           }),
         );
+      });
+    }
+
+    for (const file of toRegen) {
+      if (!thumbnailGate.isCurrent(gen)) return;
+      try {
+        const blob = await generateThumbnailBlob(file.data, baseSpec, THUMBNAIL_LONG_EDGE);
+        if (!thumbnailGate.isCurrent(gen)) return;
+        const url = URL.createObjectURL(blob);
+        const fresh: CachedThumb = { url, key: newKey };
+        withViewTransition(() => {
+          setRows((rs) =>
+            rs.map((r) => {
+              if (r.key !== file.name) return r;
+              if (!thumbnailGate.isCurrent(gen)) {
+                // The setRows closure can run a tick after the
+                // await above; if a newer generation has bumped
+                // in the meantime, drop this URL on the floor so
+                // it isn't adopted as the row's value.
+                URL.revokeObjectURL(url);
+                return r;
+              }
+              // Rotate the depth-2 LRU: evict the oldest entry
+              // (current `prevThumb`), demote the visible `thumb`
+              // to `prevThumb`, install `fresh` as the new
+              // visible layer. Revoking happens before any of
+              // the references are dropped, so the registry
+              // stays accurate even after a regen storm.
+              if (r.prevThumb) URL.revokeObjectURL(r.prevThumb.url);
+              return {
+                ...r,
+                thumb: fresh,
+                ...(r.thumb ? { prevThumb: r.thumb } : {}),
+              };
+            }),
+          );
+        });
       } catch (error) {
         if (!thumbnailGate.isCurrent(gen)) return;
         // Thumbnail failure is non-fatal — the gallery keeps the
-        // placeholder visible. Surface the error so it's not
-        // silent (memory: "production error handling — no silent
-        // fallbacks").
+        // previous (or empty) thumbnail visible. Surface the
+        // error so it's not silent (memory: "production error
+        // handling — no silent fallbacks").
         // biome-ignore lint/suspicious/noConsole: thumbnail failure diagnostic
         console.warn('thumbnail generation failed', file.name, error);
       }
@@ -233,12 +330,18 @@ export const createBatchSession = (deps: {
       rs.map((r) => {
         const match = results.find((res) => res.key === r.key);
         if (!match) return r;
+        // Both branches own the lifecycle of any pre-existing
+        // `resultUrl` on this row (the previous batch's output).
+        // Revoke before overwriting so a settings-change → regen
+        // cycle doesn't leak the prior blob into the registry.
+        if (r.resultUrl) URL.revokeObjectURL(r.resultUrl);
         if (match.ok) {
           const blob = new Blob([uint8ToBuffer(match.result)], { type: 'image/jpeg' });
           const url = URL.createObjectURL(blob);
           return { ...r, status: 'done', resultUrl: url, message: `${match.elapsed_ms} ms` };
         }
-        return { ...r, status: 'error', message: match.result };
+        const { resultUrl: _drop, ...rest } = r;
+        return { ...rest, status: 'error', message: match.result };
       }),
     );
   };
@@ -286,7 +389,7 @@ export const createBatchSession = (deps: {
     const request: WorkerRequest = {
       kind: 'batch',
       items,
-      options: deps.settings.buildPipelineOptions(deps.settings.effectiveMaxLongEdge()),
+      spec: deps.settings.buildSpec(deps.settings.effectiveMaxLongEdge()),
     };
     deps.workerTarget.postMessage(request, []);
   };

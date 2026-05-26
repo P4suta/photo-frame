@@ -18,10 +18,23 @@ serde     = { workspace = true }
 
 # Tsify generates `.d.ts` declarations from the same Serde shape the
 # WASM bridge uses, so JS consumers of `StageEvent` / `PipelineSpec`
-# receive a typed discriminated union instead of `any`. wasm32-only
-# so host builds (clippy, tests) stay free of wasm-bindgen.
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-tsify-next   = { version = "0.5", default-features = false, features = ["js"] }
+# receive a typed discriminated union instead of `any`.
+#
+# Listed as a common (not target-cfg) dependency so the
+# `Tsify` derive on `PipelineSpec` / `Preset` / `StageEvent` /
+# `FrameTheme` / `CaptionLayout` / `MetaPolicy` implements
+# `WasmDescribe` + `FromWasmAbi` / `IntoWasmAbi` on every target.
+# That lets the WASM bridge in `photo-frame-wasm` take these types
+# as `#[wasm_bindgen]` arguments and return values directly, which in
+# turn lets host clippy / cargo check (on x86_64) keep visibility into
+# those signatures rather than skipping them behind a `cfg` gate.
+# Runtime cost on host is nil — the impls are present but never
+# invoked outside the wasm32 target.
+#
+# `tsify` (not `tsify-next`): RUSTSEC-2025-0048 deprecated the
+# `tsify-next` fork once siefkenj resumed maintenance of the original
+# `tsify` crate. The API surface is identical.
+tsify        = { version = "0.5", default-features = false, features = ["js"] }
 wasm-bindgen = "0.2"
 
 [dev-dependencies]

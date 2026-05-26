@@ -30,4 +30,6 @@ pub use crate::primitives::{
     ShutterSeconds,
 };
 pub use crate::provenance::{Camera, DateTime, Exposure, Lens, Provenance};
-pub use crate::spec::{CaptionLayout, FrameTheme, MetaPolicy, PipelineSpec, Stage, StageEvent};
+pub use crate::spec::{
+    CaptionLayout, FrameStyle, FrameTheme, MetaPolicy, PipelineSpec, Preset, Stage, StageEvent,
+};

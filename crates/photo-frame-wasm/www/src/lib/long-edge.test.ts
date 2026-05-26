@@ -4,8 +4,8 @@ import {
   LONG_EDGE_OPTIONS,
   type LongEdgeKey,
   longEdgeKeyFor,
-  PRESETS,
   pickAutoDemoteKey,
+  presetDisplayName,
   sourceLongEdgeOf,
 } from './long-edge';
 
@@ -14,24 +14,10 @@ describe('LONG_EDGE_OPTIONS table', () => {
     expect(LONG_EDGE_OPTIONS.full.maxLongEdge).toBeNull();
   });
 
-  test('numeric caps are strictly descending after full', () => {
-    // The order in the segmented should read Full → 4K → FHD →
-    // HD so the auto-demote logic always finds a smaller cap
-    // by iterating from the start.
+  test('numeric caps follow the canonical screen-size ladder', () => {
     expect(LONG_EDGE_OPTIONS['4k'].maxLongEdge).toBe(3840);
     expect(LONG_EDGE_OPTIONS.fhd.maxLongEdge).toBe(1920);
     expect(LONG_EDGE_OPTIONS.hd.maxLongEdge).toBe(1280);
-  });
-});
-
-describe('PRESETS table', () => {
-  test('SNS preset caps at FHD so the segmented stays in sync', () => {
-    expect(PRESETS.sns.maxLongEdge).toBe(LONG_EDGE_OPTIONS.fhd.maxLongEdge);
-  });
-
-  test('Standard / Maximum keep the source full', () => {
-    expect(PRESETS.standard.maxLongEdge).toBeNull();
-    expect(PRESETS.maximum.maxLongEdge).toBeNull();
   });
 });
 
@@ -46,12 +32,21 @@ describe('longEdgeKeyFor', () => {
     expect(longEdgeKeyFor(1280)).toBe<LongEdgeKey>('hd');
   });
 
-  test('unmatched numeric cap falls back to "full"', () => {
-    // 2048 was the SNS preset value before it was aligned to
-    // FHD; this guards the fallback so a future numeric drift
-    // doesn't silently misclassify the preset.
-    expect(longEdgeKeyFor(2048)).toBe<LongEdgeKey>('full');
+  test('snaps a non-listed cap to the closest UI cap ≤ target', () => {
+    // The Rust-side `PipelineSpec::SNS` carries `max_long_edge =
+    // 2048`; the JS picker offers 4K / FHD / HD / Full. With
+    // "closest cap ≤ target" semantics, 2048 selects FHD (1920) —
+    // still within the preset's promise, and the picker reflects
+    // a meaningful state instead of silently falling back to Full.
+    expect(longEdgeKeyFor(2048)).toBe<LongEdgeKey>('fhd');
+    expect(longEdgeKeyFor(2560)).toBe<LongEdgeKey>('fhd');
+    expect(longEdgeKeyFor(3839)).toBe<LongEdgeKey>('fhd');
+    expect(longEdgeKeyFor(3841)).toBe<LongEdgeKey>('4k');
+  });
+
+  test('target smaller than every numeric option falls back to "full"', () => {
     expect(longEdgeKeyFor(800)).toBe<LongEdgeKey>('full');
+    expect(longEdgeKeyFor(1279)).toBe<LongEdgeKey>('full');
   });
 });
 
@@ -101,9 +96,7 @@ describe('pickAutoDemoteKey', () => {
   });
 
   test('cap > source snaps to the largest valid cap', () => {
-    // 4K (3840) selected, source is only 2000 → demote to FHD (1920).
     expect(pickAutoDemoteKey(2000, '4k')).toBe<LongEdgeKey>('fhd');
-    // 4K selected, source 1500 → FHD too big → demote to HD (1280).
     expect(pickAutoDemoteKey(1500, '4k')).toBe<LongEdgeKey>('hd');
   });
 
@@ -139,5 +132,17 @@ describe('pickAutoDemoteKey', () => {
         },
       ),
     );
+  });
+});
+
+describe('presetDisplayName', () => {
+  test('maps canonical Rust labels to UI-styled names', () => {
+    expect(presetDisplayName('sns')).toBe('SNS');
+    expect(presetDisplayName('standard')).toBe('Standard');
+    expect(presetDisplayName('maximum')).toBe('Maximum');
+  });
+
+  test('falls back to the raw label for unknown values', () => {
+    expect(presetDisplayName('archival')).toBe('archival');
   });
 });

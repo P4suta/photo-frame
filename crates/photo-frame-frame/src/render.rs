@@ -9,7 +9,7 @@ use rayon::prelude::*;
 use crate::format::{caption_from, Caption};
 use crate::geometry::{self, Composition, LayoutStyle, MetaLayout};
 use crate::num::round_to_u32;
-use crate::options::{to_image_rgba, CaptionLayout, FrameOptions, MetaPolicy};
+use crate::options::{to_image_rgba, CaptionLayout, FrameOptions, FrameStyle, MetaPolicy};
 use crate::text::{Renderer, Weight};
 
 #[tracing::instrument(
@@ -19,6 +19,7 @@ use crate::text::{Renderer, Weight};
     fields(
         photo_width = photo.pixels.width(),
         photo_height = photo.pixels.height(),
+        frame_style = opts.frame_style.label(),
         theme = opts.theme.label(),
         layout = opts.layout.label(),
         meta_policy = ?opts.meta_policy,
@@ -38,9 +39,9 @@ pub(crate) fn render(photo: &Photograph, opts: &FrameOptions) -> Pixels {
     };
     let caption_visible = !caption.is_empty();
 
-    let style = match opts.layout {
-        CaptionLayout::Polaroid => LayoutStyle::Polaroid,
-        _ => LayoutStyle::Standard,
+    let style = match opts.frame_style {
+        FrameStyle::Standard => LayoutStyle::Standard,
+        FrameStyle::Polaroid => LayoutStyle::Polaroid,
     };
     let composition =
         geometry::compute((upright.width(), upright.height()), caption_visible, style);
@@ -115,15 +116,16 @@ fn compose_canvas(
     if let Some(ml) = composition.meta.as_ref() {
         let renderer = Renderer::new(to_image_rgba(opts.theme.ink()));
         let photo_w = composition.photo_size.0;
+        // `CaptionLayout` is independent of `FrameStyle`: both the
+        // standard strip and the Polaroid bottom band host either
+        // arrangement (Edges anchors text to the photo's L/R column;
+        // Centered horizontally centres each row).
         let metrics = fit_caption(&renderer, caption, opts.layout, ml, photo_w);
         match opts.layout {
             CaptionLayout::Edges => {
                 draw_caption_edges(&mut canvas, &renderer, ml, caption, &metrics);
             },
-            CaptionLayout::Centered | CaptionLayout::Polaroid => {
-                // Polaroid geometry already centres the strip in a
-                // thick bottom band — same renderer used for both
-                // centred-text layouts.
+            CaptionLayout::Centered => {
                 draw_caption_centered(&mut canvas, &renderer, ml, caption, &metrics, canvas_w);
             },
         }
@@ -274,7 +276,7 @@ fn fit_caption(
             };
             (top, bot)
         },
-        CaptionLayout::Centered | CaptionLayout::Polaroid => {
+        CaptionLayout::Centered => {
             let top = caption.top_combined().as_deref().map_or(0.0, |t| {
                 renderer.measure(t, ml.primary_font_height, Weight::Medium)
             });

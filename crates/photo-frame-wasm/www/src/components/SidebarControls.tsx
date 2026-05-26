@@ -1,12 +1,12 @@
 import type { JSX } from 'solid-js';
-import type { FrameTheme } from '../frame-client';
+import type { FrameStyle, FrameTheme } from '../frame-client';
 import {
   CAPTION_MODES,
   type CaptionMode,
   fromCaptionMode,
   toCaptionMode,
 } from '../lib/caption-mode';
-import { LONG_EDGE_OPTIONS, type LongEdgeKey, type PresetKey, PRESETS } from '../lib/long-edge';
+import { LONG_EDGE_OPTIONS, type LongEdgeKey, presetDisplayName } from '../lib/long-edge';
 import type { AppSettings } from '../state/app-settings';
 import { Field } from './Field';
 import { Segmented } from './Segmented';
@@ -19,6 +19,22 @@ const THEMES = [
   { value: 'paper' as const, label: 'White', description: 'White frame, dark text' },
   { value: 'ink' as const, label: 'Black', description: 'Black frame, light text' },
 ] satisfies ReadonlyArray<{ value: FrameTheme; label: string; description: string }>;
+
+// Outer silhouette of the framed canvas. Lives next to `Theme`
+// because both pick the *visual identity* of the frame; caption is
+// strictly downstream (text composition inside the chosen frame).
+const FRAME_STYLES = [
+  {
+    value: 'standard' as const,
+    label: 'Standard',
+    description: 'Uniform mat with caption strip below',
+  },
+  {
+    value: 'polaroid' as const,
+    label: 'Polaroid',
+    description: 'Top-anchored photo with a thick caption band underneath',
+  },
+] satisfies ReadonlyArray<{ value: FrameStyle; label: string; description: string }>;
 
 type Props = {
   settings: AppSettings;
@@ -40,9 +56,9 @@ export const SidebarControls = (props: Props): JSX.Element => (
   <div class={controls}>
     <Field label="Preset">
       <Segmented
-        options={Object.entries(PRESETS).map(([key, info]) => ({
-          value: key as PresetKey,
-          label: info.label,
+        options={props.settings.state.presets().map((p) => ({
+          value: p.label,
+          label: presetDisplayName(p.label),
         }))}
         value={props.settings.state.preset()}
         onChange={props.settings.actions.applyPreset}
@@ -92,13 +108,28 @@ export const SidebarControls = (props: Props): JSX.Element => (
       />
     </Field>
 
+    <Field label="Frame">
+      <Segmented
+        options={FRAME_STYLES.map((s) => ({
+          value: s.value,
+          label: s.label,
+          title: s.description,
+        }))}
+        value={props.settings.state.frameStyle()}
+        onChange={props.settings.actions.setFrameStyle}
+        ariaLabel="Frame silhouette"
+      />
+    </Field>
+
     {/* Caption is a single 3-state choice rather than the prior
         "Layout" picker + "Show metadata" checkbox: when there's
         no caption, the layout picker has nothing to arrange, so
         a disabled/hidden control was always going to be a kludge.
         Folding the two into one segmented makes the dependency
         explicit — `Off` is its own state, the other two imply
-        "show + arrange this way". */}
+        "show + arrange this way". The Edges/Centered choice is
+        independent of `FrameStyle` — Polaroid's bottom band hosts
+        either arrangement just as the standard strip does. */}
     <Field label="Caption">
       <Segmented
         options={CAPTION_MODES.map((m) => ({
@@ -108,11 +139,11 @@ export const SidebarControls = (props: Props): JSX.Element => (
         }))}
         value={toCaptionMode({
           layout: props.settings.state.layout(),
-          showMeta: props.settings.state.showMeta(),
+          metaPolicy: props.settings.state.metaPolicy(),
         })}
         onChange={(v: CaptionMode) => {
           const next = fromCaptionMode(v, props.settings.state.layout());
-          props.settings.actions.setShowMeta(next.showMeta);
+          props.settings.actions.setMetaPolicy(next.metaPolicy);
           props.settings.actions.setLayout(next.layout);
         }}
         ariaLabel="Caption metadata"

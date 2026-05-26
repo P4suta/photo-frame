@@ -26,11 +26,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use js_sys::{Array, Function, Object, Reflect, Uint8Array};
 use photo_frame::encode::JpegOptions;
-use photo_frame::frame::{CaptionLayout, FrameOptions, FrameTheme, MetaPolicy};
 use photo_frame::{
-    batch_one, DecodeError, Photograph, PipelineError, PipelineOptions, Pixels, StageEvent,
+    batch_one, DecodeError, Photograph, PipelineError, PipelineOptions, PipelineSpec, Pixels,
+    Preset, StageEvent,
 };
-use serde::Deserialize;
 use tracing::{debug, error, info, warn};
 use tracing_wasm::{set_as_global_default_with_config, WASMLayerConfigBuilder};
 use wasm_bindgen::prelude::{wasm_bindgen, JsCast, JsError, JsValue};
@@ -162,15 +161,18 @@ fn cached_or_decode(bytes: &[u8]) -> Result<Arc<Photograph>, DecodeError> {
 /// bytes — and the caller is expected to paint it onto a canvas via
 /// `putImageData(new ImageData(new Uint8ClampedArray(rgba.buffer, ...)))`.
 ///
-/// `frame_options` mirrors the renderer's [`FrameOptions`] minus
-/// `jpeg_quality` — quality lives in [`encode_jpeg`], where it belongs.
+/// `spec` is the canonical [`PipelineSpec`] — the same struct the CLI
+/// resolves from `--preset` / `--quality` / `--max-long-edge`. The
+/// render path consumes `theme`, `layout`, `meta_policy`, and
+/// `max_long_edge`; `jpeg_quality` is ignored here (encode is
+/// [`encode_jpeg`]'s job).
 ///
 /// # Errors
-/// [`JsError`] with the full source chain of the underlying decode/encode
-/// pipeline, or a `serde-wasm-bindgen` deserialisation error if
-/// `frame_options` cannot be parsed.
+/// [`JsError`] with the full source chain of the underlying decode
+/// pipeline. `spec` is typed (`tsify`) so malformed inputs fail
+/// at the WASM boundary rather than reaching this function.
 #[wasm_bindgen]
-pub fn render_pixels(bytes: &[u8], frame_options: JsValue) -> Result<JsValue, JsError> {
+pub fn render_pixels(bytes: &[u8], spec: PipelineSpec) -> Result<JsValue, JsError> {
     let span = tracing::info_span!(
         "wasm_render_pixels",
         input_bytes = bytes.len(),
@@ -178,7 +180,7 @@ pub fn render_pixels(bytes: &[u8], frame_options: JsValue) -> Result<JsValue, Js
         height = tracing::field::Empty,
     );
     let _enter = span.enter();
-    let frame_opts = build_frame_options(frame_options)?;
+    let frame_opts = PipelineOptions::from_spec(spec).frame;
 
     let photo = cached_or_decode(bytes)
         .map_err(|e| JsError::new(&display_chain(&PipelineError::Decode(e))))?;
@@ -194,6 +196,18 @@ pub fn render_pixels(bytes: &[u8], frame_options: JsValue) -> Result<JsValue, Js
     set_or_throw(&obj, "width", &JsValue::from_f64(f64::from(width)))?;
     set_or_throw(&obj, "height", &JsValue::from_f64(f64::from(height)))?;
     Ok(obj.into())
+}
+
+/// Hand the canonical `PipelineSpec::PRESETS` table across the WASM
+/// boundary as a typed `Preset[]`.
+///
+/// The JS side builds its UI preset picker from Rust's source of
+/// truth — quality and `max_long_edge` values stay in lock-step with
+/// the Rust consts without a parallel JS table to drift against.
+#[wasm_bindgen(js_name = getPresets)]
+#[must_use]
+pub fn get_presets() -> Vec<Preset> {
+    PipelineSpec::presets()
 }
 
 /// Encode an RGBA8 buffer at the given JPEG quality.
@@ -241,19 +255,24 @@ pub fn encode_jpeg(rgba: &[u8], width: u32, height: u32, quality: u8) -> Result<
 /// field is the framed JPEG bytes on success or the human-readable
 /// error chain on failure (rendered the same way `display_chain` does).
 ///
+/// `spec` is the canonical [`PipelineSpec`] consumed for every item.
+///
 /// `progress` is a JS function invoked once each pipeline stage
 /// completes — front-ends use it to fill a per-item progress bar.
-/// The event passed in is `{ index, total, key, stage }` where
-/// `stage` is one of `"decode"`, `"frame"`, or `"encode"`. The JS
-/// side decides how stage labels map to a numeric percentage.
+/// The event passed in is the typed [`StageEvent`] (see
+/// `pkg/photo_frame_wasm.d.ts`).
 ///
 /// # Errors
 /// A [`JsError`] is returned only for failures that prevent the batch
-/// from running at all (malformed options, malformed item structure).
-/// Per-item failures are *captured* in the returned array — a single
-/// bad JPEG never aborts the batch.
+/// from running at all (malformed item structure). Per-item failures
+/// are *captured* in the returned array — a single bad JPEG never
+/// aborts the batch.
 #[wasm_bindgen]
-pub fn frame_batch(items: &Array, options: JsValue, progress: &Function) -> Result<Array, JsError> {
+pub fn frame_batch(
+    items: &Array,
+    spec: PipelineSpec,
+    progress: &Function,
+) -> Result<Array, JsError> {
     let total = items.length();
     let span = tracing::info_span!(
         "wasm_frame_batch",
@@ -262,7 +281,7 @@ pub fn frame_batch(items: &Array, options: JsValue, progress: &Function) -> Resu
         failed = tracing::field::Empty,
     );
     let _enter = span.enter();
-    let pipeline_opts = build_pipeline_options(options)?;
+    let pipeline_opts = PipelineOptions::from_spec(spec);
 
     let results = Array::new();
     let mut succeeded = 0u32;
@@ -317,7 +336,7 @@ pub fn frame_batch(items: &Array, options: JsValue, progress: &Function) -> Resu
 /// Hand the typed `StageEvent` to the JS-side `progress` callback.
 ///
 /// `serde_wasm_bindgen::to_value` round-trips the struct through the
-/// Serde shape that `tsify-next` already emits a `.d.ts` for, so the
+/// Serde shape that `tsify` already emits a `.d.ts` for, so the
 /// JS side receives the exact discriminated union the type system
 /// describes — no parallel field-by-field copying, no string casts.
 fn emit_progress(progress: &Function, event: &StageEvent) {
@@ -377,59 +396,6 @@ fn set_or_throw(obj: &Object, key: &str, value: &JsValue) -> Result<(), JsError>
     Ok(())
 }
 
-/// Decode JS-side frame-only options (no `jpeg_quality`) into the typed
-/// [`FrameOptions`]. Used by [`render_pixels`] only — batch carries the
-/// full [`PipelineOptions`] shape, see [`build_pipeline_options`].
-fn build_frame_options(options: JsValue) -> Result<FrameOptions, JsError> {
-    let opts: JsFrameOptions = serde_wasm_bindgen::from_value(options).map_err(|e| {
-        error!(
-            event_id = "wasm.options_invalid",
-            error = %e,
-            "failed to parse JS frame options",
-        );
-        JsError::new(&format!("invalid frame options: {e}"))
-    })?;
-    Ok(FrameOptions {
-        theme: opts.theme,
-        layout: opts.layout,
-        meta_policy: if opts.show_meta {
-            MetaPolicy::Auto
-        } else {
-            MetaPolicy::Never
-        },
-        max_long_edge: opts.max_long_edge,
-    })
-}
-
-/// Decode JS-side options for the atomic batch path into a full
-/// [`PipelineOptions`]. Lives next to `frame_batch` because nothing
-/// else needs it.
-fn build_pipeline_options(options: JsValue) -> Result<PipelineOptions, JsError> {
-    let opts: JsPipelineOptions = serde_wasm_bindgen::from_value(options).map_err(|e| {
-        error!(
-            event_id = "wasm.options_invalid",
-            error = %e,
-            "failed to parse JS pipeline options",
-        );
-        JsError::new(&format!("invalid pipeline options: {e}"))
-    })?;
-    Ok(PipelineOptions {
-        frame: FrameOptions {
-            theme: opts.theme,
-            layout: opts.layout,
-            meta_policy: if opts.show_meta {
-                MetaPolicy::Auto
-            } else {
-                MetaPolicy::Never
-            },
-            max_long_edge: opts.max_long_edge,
-        },
-        jpeg: JpegOptions {
-            quality: opts.jpeg_quality,
-        },
-    })
-}
-
 /// Render `err` as a single string carrying the full cause chain, mirroring
 /// the CLI's error reporter.
 fn display_chain(err: &PipelineError) -> String {
@@ -444,30 +410,4 @@ fn display_chain(err: &PipelineError) -> String {
     }
     error!(chain = %message, "framing failed");
     message
-}
-
-/// Frame-only options. `jpeg_quality` is intentionally absent: it lives
-/// on the encode side ([`encode_jpeg`]).
-///
-/// `theme` and `layout` deserialize directly into the typed enums via
-/// the Serde derive on `FrameTheme` / `CaptionLayout` — the JS side
-/// sends the canonical lowercase label and Serde rejects anything else
-/// with `unknown variant` at the boundary.
-#[derive(Debug, Deserialize)]
-struct JsFrameOptions {
-    theme: FrameTheme,
-    layout: CaptionLayout,
-    show_meta: bool,
-    max_long_edge: Option<u32>,
-}
-
-/// JS-facing batch options shape. Same Serde-driven parsing as
-/// [`JsFrameOptions`] with the addition of `jpeg_quality`.
-#[derive(Debug, Deserialize)]
-struct JsPipelineOptions {
-    jpeg_quality: u8,
-    theme: FrameTheme,
-    layout: CaptionLayout,
-    show_meta: bool,
-    max_long_edge: Option<u32>,
 }

@@ -6,6 +6,7 @@ import { Gallery, type GalleryRow } from './Gallery';
 
 const rowOf = (overrides: Partial<GalleryRow> & { key: string; name: string }): GalleryRow => ({
   status: 'queued',
+  transitionName: `gallery-thumb-${overrides.key}`,
   ...overrides,
 });
 
@@ -54,7 +55,7 @@ describe('<Gallery>', () => {
     expect(getByText('✗ Error')).toBeTruthy();
   });
 
-  test('paints a placeholder div when no thumbnailUrl is present', () => {
+  test('paints a placeholder div when no thumbnail is present', () => {
     const rows: GalleryRow[] = [rowOf({ key: 'pending.jpg', name: 'pending.jpg' })];
     const { container } = render(() => <Gallery rows={rows} />);
     expect(container.querySelector('img')).toBeNull();
@@ -62,13 +63,13 @@ describe('<Gallery>', () => {
     expect(container.querySelector('.gallery-thumb')?.firstElementChild?.tagName).toBe('DIV');
   });
 
-  test('paints an <img> with src=thumbnailUrl when one is present', () => {
+  test('paints an <img> with src=thumb.url when one is present', () => {
     const rows: GalleryRow[] = [
       rowOf({
         key: 'ok.jpg',
         name: 'ok.jpg',
         status: 'processing',
-        thumbnailUrl: 'blob:test/1',
+        thumb: { url: 'blob:test/1' },
       }),
     ];
     const { container } = render(() => <Gallery rows={rows} />);
@@ -78,6 +79,15 @@ describe('<Gallery>', () => {
     // Decorative — the visible file name carries the identity.
     expect(img?.getAttribute('alt')).toBe('');
   });
+
+  // Per-row `view-transition-name` is set as a CSS property on
+  // the `<img>` via Solid's `style={{ ... }}` JSX, but jsdom's
+  // CSSOM silently drops properties it doesn't recognise (the
+  // View Transitions spec is too new), so the attribute is empty
+  // after render. The wiring is pinned upstream in
+  // `state/batch-session.test.ts` (each seeded BatchRow gets a
+  // `transitionName` field) and the visual effect is verified
+  // manually in the browser.
 
   test('the row name becomes the title attribute (full-name hover)', () => {
     // Long file names get truncated visually; the title carries

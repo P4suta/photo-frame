@@ -75,14 +75,14 @@ unused-allowed-license = "allow"
 confidence-threshold = 0.93
 
 [advisories]
-# Advisories are gated explicitly. `vulnerability = "deny"` is the
-# cargo-deny default but we spell it out so a future config rewrite
-# can't silently soften it; the rest tightens what cargo-deny's
-# default leaves at "warn".
-vulnerability = "deny"
-yanked        = "deny"
-unmaintained  = "workspace"
-ignore        = []
+# RUSTSEC vulnerability advisories are always denied — `cargo-deny`
+# 0.16+ removed the `vulnerability` key (PR #611) and now enforces
+# "deny" at the binary level, so there is no longer a config knob a
+# future rewrite could silently soften. The keys below tighten what
+# the binary still leaves configurable.
+yanked       = "deny"
+unmaintained = "workspace"
+ignore       = []
 
 [sources]
 unknown-registry = "deny"

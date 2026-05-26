@@ -16,7 +16,11 @@
 
 use std::str::FromStr;
 
+use serde::{Deserialize, Serialize};
+use tsify::Tsify;
+
 use crate::primitives::{JpegQuality, LongEdge};
+use crate::spec::frame_style::FrameStyle;
 use crate::spec::layout::CaptionLayout;
 use crate::spec::theme::{unknown_label_error, FrameTheme, MetaPolicy};
 
@@ -26,18 +30,45 @@ use crate::spec::theme::{unknown_label_error, FrameTheme, MetaPolicy};
 /// resolve `--preset` / `--quality` / `--max-long-edge` once, then
 /// hand the same bundle to every batch item without intermediate
 /// conversion types.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+///
+/// ## Wire shape
+///
+/// `serde` emits / accepts a flat object with `snake_case` keys
+/// (`frame_style`, `theme`, `layout`, `meta_policy`, `jpeg_quality`,
+/// `max_long_edge`).
+/// `tsify` exports the same shape as a typed TypeScript
+/// `interface PipelineSpec` to JS consumers — both directions
+/// (`into_wasm_abi` for return values, `from_wasm_abi` for arguments).
+#[derive(Tsify, Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct PipelineSpec {
+    /// Outer canvas silhouette. See [`FrameStyle`].
+    pub frame_style: FrameStyle,
     /// Paired frame colour + caption ink.
     pub theme: FrameTheme,
-    /// How the caption strip distributes its facets.
+    /// How the caption text is arranged inside the standard-style
+    /// frame. Ignored when [`Self::frame_style`] is
+    /// [`FrameStyle::Polaroid`] (a Polaroid silhouette always centres
+    /// its caption).
     pub layout: CaptionLayout,
     /// Whether the metadata strip is drawn at all.
     pub meta_policy: MetaPolicy,
     /// JPEG quality the encoder uses (`1..=100`).
+    //
+    // `tsify` doesn't see through `#[serde(try_from / into)]` —
+    // it would otherwise emit the wrapper type by name. We override the
+    // declared TS type so JS sees the raw number it actually receives
+    // on the wire; the validating `TryFrom<u8>` impl still runs on
+    // inbound deserialise.
+    #[tsify(type = "number")]
     pub jpeg_quality: JpegQuality,
     /// If set, downscale the photo so its longer edge is at most this
     /// many pixels before framing. `None` keeps the source resolution.
+    //
+    // Same override reason as `jpeg_quality`. We also force `null`
+    // instead of tsify's default `undefined` so JSON round-trip and
+    // the TS type agree (Serde emits `null` for `Option::None`).
+    #[tsify(type = "number | null")]
     pub max_long_edge: Option<LongEdge>,
 }
 
@@ -46,6 +77,7 @@ impl PipelineSpec {
     /// quality, long edge clamped to 2048 px so platforms do not
     /// aggressively re-compress the upload.
     pub const SNS: Self = Self {
+        frame_style: FrameStyle::Standard,
         theme: FrameTheme::Paper,
         layout: CaptionLayout::Edges,
         meta_policy: MetaPolicy::Auto,
@@ -66,6 +98,7 @@ impl PipelineSpec {
     /// Balanced default. Visually transparent at the downsample-and-zoom
     /// sizes most viewers use. No downscale.
     pub const STANDARD: Self = Self {
+        frame_style: FrameStyle::Standard,
         theme: FrameTheme::Paper,
         layout: CaptionLayout::Edges,
         meta_policy: MetaPolicy::Auto,
@@ -78,6 +111,7 @@ impl PipelineSpec {
 
     /// Print / archive grade. Highest quality JPEG, no downscale.
     pub const MAXIMUM: Self = Self {
+        frame_style: FrameStyle::Standard,
         theme: FrameTheme::Paper,
         layout: CaptionLayout::Edges,
         meta_policy: MetaPolicy::Auto,
@@ -87,6 +121,13 @@ impl PipelineSpec {
         },
         max_long_edge: None,
     };
+
+    /// Builder: override [`Self::frame_style`].
+    #[must_use]
+    pub const fn with_frame_style(mut self, style: FrameStyle) -> Self {
+        self.frame_style = style;
+        self
+    }
 
     /// Builder: override [`Self::theme`].
     #[must_use]
@@ -165,9 +206,43 @@ impl Default for PipelineSpec {
     }
 }
 
+/// A named preset paired with its resolved [`PipelineSpec`].
+///
+/// `PipelineSpec::PRESETS` is the static `(label, spec)` table that
+/// every front-end reads from; `Preset` is the owned, Serialize-able
+/// view that crosses the WASM boundary as a typed array element, so
+/// the JS UI can render preset names + drive its quality/long-edge
+/// pickers without hand-duplicating the Rust source-of-truth values.
+#[derive(Tsify, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[tsify(into_wasm_abi)]
+pub struct Preset {
+    /// Canonical kebab-case label (e.g. `"sns"`, `"standard"`,
+    /// `"maximum"`). Matches the keys in `PipelineSpec::PRESETS` and
+    /// the labels `PipelineSpec::from_str` accepts.
+    pub label: String,
+    /// Concrete pipeline configuration this preset names.
+    pub spec: PipelineSpec,
+}
+
+impl PipelineSpec {
+    /// Materialise [`Self::PRESETS`] as owned [`Preset`] rows. The WASM
+    /// `get_presets` export calls this so JS receives a typed
+    /// `Preset[]` it can iterate at init time.
+    #[must_use]
+    pub fn presets() -> Vec<Preset> {
+        Self::PRESETS
+            .iter()
+            .map(|(label, spec)| Preset {
+                label: (*label).to_owned(),
+                spec: *spec,
+            })
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::PipelineSpec;
+    use super::{FrameStyle, PipelineSpec};
     use crate::primitives::{JpegQuality, LongEdge};
 
     #[test]
@@ -250,5 +325,51 @@ mod tests {
             // pin it again here as a smoke check.
             assert!(spec.jpeg_quality.get() >= 1);
         }
+    }
+
+    #[test]
+    fn sns_spec_round_trips_as_snake_case_object_with_raw_primitives() {
+        // Pin the JSON / WASM-FFI shape `PipelineSpec` exposes. The
+        // JS-side `pkg/photo_frame_wasm.d.ts` is generated from the
+        // same Serde derive (via tsify), so a shape drift caught
+        // here is the same drift a `bun run typecheck` would catch on
+        // the web side — but at Rust unit-test speed.
+        let sns = PipelineSpec::SNS;
+        let wire = serde_json::to_string(&sns).unwrap();
+        assert_eq!(
+            wire,
+            r#"{"frame_style":"standard","theme":"paper","layout":"edges","meta_policy":"auto","jpeg_quality":78,"max_long_edge":2048}"#,
+        );
+        let round: PipelineSpec = serde_json::from_str(&wire).unwrap();
+        assert_eq!(round, sns);
+    }
+
+    #[test]
+    fn deserialize_rejects_out_of_range_primitives_at_the_wire_boundary() {
+        // A malformed JSON payload (`jpeg_quality: 0` or
+        // `max_long_edge: 0`) must fail at deserialise, not after —
+        // the typed primitive's validating constructor is the only way
+        // to construct a value, including across the FFI.
+        let bad_quality = r#"{"frame_style":"standard","theme":"paper","layout":"edges","meta_policy":"auto","jpeg_quality":0,"max_long_edge":null}"#;
+        assert!(serde_json::from_str::<PipelineSpec>(bad_quality).is_err());
+        let bad_edge = r#"{"frame_style":"standard","theme":"paper","layout":"edges","meta_policy":"auto","jpeg_quality":92,"max_long_edge":0}"#;
+        assert!(serde_json::from_str::<PipelineSpec>(bad_edge).is_err());
+    }
+
+    #[test]
+    fn with_frame_style_polaroid_overrides_default_standard() {
+        let spec = PipelineSpec::STANDARD.with_frame_style(FrameStyle::Polaroid);
+        assert_eq!(spec.frame_style, FrameStyle::Polaroid);
+        // Other fields preserved.
+        assert_eq!(spec.jpeg_quality.get(), 92);
+    }
+
+    #[test]
+    fn standard_spec_omits_long_edge_as_null() {
+        let wire = serde_json::to_string(&PipelineSpec::STANDARD).unwrap();
+        // `Option::None` serialises as JSON null — the JS side reads
+        // it as `null` and the typed `max_long_edge: number | null`
+        // field from tsify handles both arms naturally.
+        assert!(wire.contains(r#""max_long_edge":null"#));
     }
 }

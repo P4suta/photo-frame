@@ -1,19 +1,23 @@
-//! Caption layout — how the caption strip arranges its lines around
-//! the photo inside the framed canvas.
+//! Caption layout — how caption text is arranged inside the
+//! standard-style frame.
+//!
+//! Independent of [`crate::FrameStyle`] (the canvas silhouette).
+//! `Polaroid` lives over there: a Polaroid frame always centres its
+//! caption, so this enum stays a pure "Edges vs Centered" choice
+//! that only the standard silhouette consumes.
 
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
+use tsify::Tsify;
 
 use crate::spec::theme::unknown_label_error;
 
-/// How the caption is arranged inside the framed print.
+/// How the caption text is arranged inside the standard-style frame.
 ///
-/// The first two variants share the same standard frame geometry
-/// (photo centred in a uniform-mat canvas, strip below the photo);
-/// they differ only in the horizontal composition of the caption.
-/// The third variant switches to a Polaroid-style geometry — photo
-/// top-anchored, large bottom band with caption centred inside.
+/// Both variants share the same standard frame geometry (photo
+/// centred in a uniform-mat canvas, strip below the photo); they
+/// differ only in the horizontal composition of the caption.
 ///
 /// - `Edges` keeps the four-corner layout: camera left, lens right on
 ///   the primary row; exposure left, date right on the secondary row.
@@ -21,9 +25,12 @@ use crate::spec::theme::unknown_label_error;
 ///   edges so caption and photo share a single visual column.
 /// - `Centered` joins each row with a `"  ·  "` separator and centres
 ///   the result horizontally inside the strip.
-/// - `Polaroid` selects the Polaroid frame geometry (photo at top,
-///   thick bottom band) and centres the caption inside the band.
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// `Polaroid` previously lived here too; it has moved to
+/// [`crate::FrameStyle::Polaroid`] because Polaroid changes the
+/// canvas silhouette, not just the caption arrangement.
+#[derive(Tsify, Copy, Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
 #[serde(rename_all = "lowercase")]
 pub enum CaptionLayout {
     /// Camera/lens at the primary-row corners, exposure/date at the
@@ -34,9 +41,6 @@ pub enum CaptionLayout {
     /// Both rows centred under the photo, with the same `"  ·  "`
     /// separator used inside the exposure line.
     Centered,
-    /// Polaroid-style frame: photo at top, thick bottom band carries
-    /// both caption rows centred horizontally inside the band.
-    Polaroid,
 }
 
 impl CaptionLayout {
@@ -47,12 +51,11 @@ impl CaptionLayout {
         match self {
             Self::Edges => "edges",
             Self::Centered => "centered",
-            Self::Polaroid => "polaroid",
         }
     }
 
     /// Every variant in canonical declaration order.
-    pub const ALL: &'static [Self] = &[Self::Edges, Self::Centered, Self::Polaroid];
+    pub const ALL: &'static [Self] = &[Self::Edges, Self::Centered];
 }
 
 impl FromStr for CaptionLayout {
@@ -86,18 +89,13 @@ mod tests {
     fn layout_labels_match_canonical_kebab_case() {
         assert_eq!(CaptionLayout::Edges.label(), "edges");
         assert_eq!(CaptionLayout::Centered.label(), "centered");
-        assert_eq!(CaptionLayout::Polaroid.label(), "polaroid");
     }
 
     #[test]
     fn layout_all_lists_every_variant_in_declaration_order() {
         assert_eq!(
             CaptionLayout::ALL,
-            &[
-                CaptionLayout::Edges,
-                CaptionLayout::Centered,
-                CaptionLayout::Polaroid,
-            ],
+            &[CaptionLayout::Edges, CaptionLayout::Centered],
         );
     }
 
@@ -111,18 +109,15 @@ mod tests {
             CaptionLayout::from_str("centered").unwrap(),
             CaptionLayout::Centered,
         );
-        assert_eq!(
-            CaptionLayout::from_str("polaroid").unwrap(),
-            CaptionLayout::Polaroid,
-        );
     }
 
     #[test]
     fn layout_from_str_rejects_unknown_labels_with_actionable_message() {
-        let err = CaptionLayout::from_str("stacked").unwrap_err();
-        assert!(err.contains("stacked"));
+        let err = CaptionLayout::from_str("polaroid").unwrap_err();
+        // Polaroid is no longer a caption layout — surface it explicitly
+        // so anyone passing the old label gets pointed at `FrameStyle`.
+        assert!(err.contains("polaroid"));
         assert!(err.contains("edges"));
         assert!(err.contains("centered"));
-        assert!(err.contains("polaroid"));
     }
 }

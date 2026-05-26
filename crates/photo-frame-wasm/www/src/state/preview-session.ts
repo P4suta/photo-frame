@@ -27,8 +27,10 @@ import type { DroppedFile } from '../DropZone';
 import {
   type CaptionLayout,
   encodeJpeg,
-  type FrameOptionsForPrepare,
+  type FrameStyle,
   type FrameTheme,
+  type MetaPolicy,
+  type PipelineSpec,
   type PreparedPixels,
   preparePixels,
 } from '../frame-client';
@@ -87,7 +89,12 @@ export const createPreviewSession = (deps: {
   );
 
   const currentVariantKey = createMemo(() =>
-    variantKey(deps.settings.theme(), deps.settings.layout(), deps.settings.showMeta()),
+    variantKey(
+      deps.settings.frameStyle(),
+      deps.settings.theme(),
+      deps.settings.layout(),
+      deps.settings.metaPolicy(),
+    ),
   );
   const pixels = createMemo<PreparedPixels | null>(
     () => variants().get(currentVariantKey()) ?? null,
@@ -105,13 +112,13 @@ export const createPreviewSession = (deps: {
 
   const runPreparePromise = async (
     current: DroppedFile,
-    opts: FrameOptionsForPrepare,
+    spec: PipelineSpec,
     key: VariantKey,
     gen: number,
   ): Promise<void> => {
     deps.setStatus('Framing preview…');
     try {
-      const result = await preparePixels(current.data, opts);
+      const result = await preparePixels(current.data, spec);
       if (!prepareGate.isCurrent(gen) || deps.source() !== current) return;
       setVariants((c) => c.set(key, result));
       deps.setStatus('');
@@ -120,20 +127,35 @@ export const createPreviewSession = (deps: {
     }
   };
 
+  type Variant = {
+    frameStyle: FrameStyle;
+    theme: FrameTheme;
+    layout: CaptionLayout;
+    metaPolicy: MetaPolicy;
+  };
+
+  const variantSpec = (v: Variant, maxLongEdge: number | null): PipelineSpec => ({
+    frame_style: v.frameStyle,
+    theme: v.theme,
+    layout: v.layout,
+    meta_policy: v.metaPolicy,
+    jpeg_quality: deps.settings.quality(),
+    max_long_edge: maxLongEdge,
+  });
+
   const runPrepareAndPrefetch = async (
     current: DroppedFile,
-    initial: { theme: FrameTheme; layout: CaptionLayout; showMeta: boolean },
+    initial: Variant,
     maxLongEdge: number | null,
     gen: number,
   ): Promise<void> => {
-    const initialKey = variantKey(initial.theme, initial.layout, initial.showMeta);
-    const initialOpts: FrameOptionsForPrepare = {
-      theme: initial.theme,
-      layout: initial.layout,
-      show_meta: initial.showMeta,
-      max_long_edge: maxLongEdge,
-    };
-    await runPreparePromise(current, initialOpts, initialKey, gen);
+    const initialKey = variantKey(
+      initial.frameStyle,
+      initial.theme,
+      initial.layout,
+      initial.metaPolicy,
+    );
+    await runPreparePromise(current, variantSpec(initial, maxLongEdge), initialKey, gen);
     if (!prepareGate.isCurrent(gen)) return;
     // Sequential background prefetch — Worker serialises anyway, and
     // sequencing means a user-initiated `runPreparePromise` from the
@@ -141,16 +163,10 @@ export const createPreviewSession = (deps: {
     // flight ahead of it to wait on (~50–200 ms at preview res).
     for (const v of ALL_VARIANTS) {
       if (!prepareGate.isCurrent(gen)) return;
-      const key = variantKey(v.theme, v.layout, v.showMeta);
+      const key = variantKey(v.frameStyle, v.theme, v.layout, v.metaPolicy);
       if (variants().hasFresh(key)) continue;
-      const opts: FrameOptionsForPrepare = {
-        theme: v.theme,
-        layout: v.layout,
-        show_meta: v.showMeta,
-        max_long_edge: maxLongEdge,
-      };
       try {
-        const result = await preparePixels(current.data, opts);
+        const result = await preparePixels(current.data, variantSpec(v, maxLongEdge));
         if (!prepareGate.isCurrent(gen)) return;
         setVariants((c) => c.set(key, result));
       } catch {
@@ -177,10 +193,11 @@ export const createPreviewSession = (deps: {
         if (!scope) return;
         const gen = prepareGate.bump();
         setVariants((c) => c.rotate());
-        const initial = {
+        const initial: Variant = {
+          frameStyle: deps.settings.frameStyle(),
           theme: deps.settings.theme(),
           layout: deps.settings.layout(),
-          showMeta: deps.settings.showMeta(),
+          metaPolicy: deps.settings.metaPolicy(),
         };
         void runPrepareAndPrefetch(scope.current, initial, scope.maxLongEdge, gen);
       },
@@ -189,7 +206,7 @@ export const createPreviewSession = (deps: {
 
   // ── variant-toggle effect ────────────────────────────────────────
   //
-  // If the user toggles theme/layout/show_meta to a variant the
+  // If the user toggles theme/layout/metaPolicy to a variant the
   // prefetch loop hasn't reached yet, kick off an out-of-order
   // prepare. `defer: true` so this doesn't fire on initial setup
   // (the scope effect above already covers that path).
@@ -200,8 +217,8 @@ export const createPreviewSession = (deps: {
         const current = deps.source();
         if (!current) return;
         if (variants().hasFresh(key)) return;
-        const opts = deps.settings.buildFrameOptions(deps.settings.effectiveMaxLongEdge());
-        void runPreparePromise(current, opts, key, prepareGate.current());
+        const spec = deps.settings.buildSpec(deps.settings.effectiveMaxLongEdge());
+        void runPreparePromise(current, spec, key, prepareGate.current());
       },
       { defer: true },
     ),
@@ -263,7 +280,7 @@ export const createPreviewSession = (deps: {
     try {
       const full = await preparePixels(
         current.data,
-        deps.settings.buildFrameOptions(deps.settings.effectiveMaxLongEdge()),
+        deps.settings.buildSpec(deps.settings.effectiveMaxLongEdge()),
       );
       // Phase F3-lite — `encodeJpeg` slices internally before worker
       // transfer; a second slice here was redundant.

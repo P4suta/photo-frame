@@ -16,8 +16,8 @@ use clap::{ArgAction, Parser, ValueEnum};
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use miette::{Diagnostic, Result, WrapErr};
 use photo_frame::{
-    pipeline, CaptionLayout, Categorize, Category, FrameTheme, JpegQuality, LongEdge, MetaPolicy,
-    PipelineError, PipelineOptions, PipelineSpec,
+    pipeline, CaptionLayout, Categorize, Category, FrameStyle, FrameTheme, JpegQuality, LongEdge,
+    MetaPolicy, PipelineError, PipelineOptions, PipelineSpec,
 };
 use rayon::prelude::*;
 use thiserror::Error;
@@ -63,12 +63,20 @@ struct Cli {
     #[arg(long, default_value = "paper", value_parser = theme_value_parser())]
     theme: String,
 
-    /// Caption layout. `edges` keeps the four-corner liit-style layout;
-    /// `centered` joins each row with a `·` separator and centres it
-    /// under the photo; `polaroid` switches to the Polaroid frame
-    /// geometry with a centred caption inside the bottom band.
+    /// Caption layout inside the standard-style frame. `edges` keeps
+    /// the four-corner liit-style layout; `centered` joins each row
+    /// with a `·` separator and centres it under the photo. Ignored
+    /// when `--frame-style polaroid` is in effect (Polaroid always
+    /// centres its caption).
     #[arg(long, default_value = "edges", value_parser = layout_value_parser())]
     layout: String,
+
+    /// Outer canvas silhouette. `standard` centres the photo with a
+    /// uniform mat and a caption strip below. `polaroid` switches to
+    /// the Polaroid silhouette: photo top-anchored, thick bottom
+    /// band carrying the (always centred) caption.
+    #[arg(long, default_value = "standard", value_parser = frame_style_value_parser())]
+    frame_style: String,
 
     /// Maximum number of inputs to process in parallel. Defaults to the
     /// number of logical CPUs (clamped to the input count). Use
@@ -126,6 +134,11 @@ fn theme_value_parser() -> PossibleValuesParser {
 /// Build a `PossibleValuesParser` enumerating every `CaptionLayout` label.
 fn layout_value_parser() -> PossibleValuesParser {
     PossibleValuesParser::new(CaptionLayout::ALL.iter().map(|v| v.label()))
+}
+
+/// Build a `PossibleValuesParser` enumerating every `FrameStyle` label.
+fn frame_style_value_parser() -> PossibleValuesParser {
+    PossibleValuesParser::new(FrameStyle::ALL.iter().map(|v| v.label()))
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -547,8 +560,13 @@ fn build_options(cli: &Cli) -> PipelineOptions {
         .expect("clap's PossibleValuesParser gates --theme against FrameTheme::ALL");
     let layout = CaptionLayout::from_str(&cli.layout)
         .expect("clap's PossibleValuesParser gates --layout against CaptionLayout::ALL");
+    let frame_style = FrameStyle::from_str(&cli.frame_style)
+        .expect("clap's PossibleValuesParser gates --frame-style against FrameStyle::ALL");
 
-    let mut spec = base.with_theme(theme).with_layout(layout);
+    let mut spec = base
+        .with_frame_style(frame_style)
+        .with_theme(theme)
+        .with_layout(layout);
     if cli.no_meta {
         spec = spec.with_meta_policy(MetaPolicy::Never);
     }

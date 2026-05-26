@@ -1,20 +1,12 @@
-// Resolution / preset lookup tables — pulled out of `App.tsx`
-// so the table values and the helpers that consume them can be
-// unit-tested without spinning up the SolidJS reactive scope.
-
-/** Quality presets — mirror of `photo_frame::QualityPreset` on
- *  the Rust side. Each preset rolls up two settings the user
- *  doesn't have to think about individually: JPEG quality and
- *  the source long-edge cap. The Rust side is the source of
- *  truth; this duplication keeps preset clicks UI-responsive
- *  (no WASM round-trip just to expand the preset). */
-export const PRESETS = {
-  sns: { label: 'SNS', quality: 78, maxLongEdge: 1920 as number | null },
-  standard: { label: 'Standard', quality: 92, maxLongEdge: null as number | null },
-  maximum: { label: 'Maximum', quality: 98, maxLongEdge: null as number | null },
-} as const satisfies Record<string, { label: string; quality: number; maxLongEdge: number | null }>;
-
-export type PresetKey = keyof typeof PRESETS;
+// Long-edge picker options + the helpers that snap user / preset
+// values to one of those keys.
+//
+// `LONG_EDGE_OPTIONS` is the UI Long-edge segmented's source of
+// truth (Full / 4K / FHD / HD). The Rust-side `PipelineSpec`'s
+// presets carry their own numeric `max_long_edge` caps that flow
+// across the WASM boundary as `Preset[]`; `longEdgeKeyFor` projects
+// such a cap into the closest UI key so the picker shows a
+// meaningful selection after a preset click.
 
 /** Long-edge size choices the user picks from in the
  *  Resolution segmented. `Full` (= null cap) is the source-
@@ -29,18 +21,28 @@ export const LONG_EDGE_OPTIONS = {
 
 export type LongEdgeKey = keyof typeof LONG_EDGE_OPTIONS;
 
-/** Map a preset's numeric `maxLongEdge` onto the closest
- *  `LongEdgeKey`. Equality matching only — the preset table is
- *  intentionally aligned with the LONG_EDGE_OPTIONS values, so
- *  a strict match is correct. Falls back to `'full'` for any
- *  cap that doesn't appear in the options table (including
- *  `null`, which `LONG_EDGE_OPTIONS.full.maxLongEdge` matches
- *  exactly anyway). */
+/** Project a numeric `maxLongEdge` (typically from a Rust
+ *  `PipelineSpec`'s preset) onto the closest UI `LongEdgeKey`
+ *  whose cap is `≤` the target. Returns `'full'` for `null`
+ *  inputs and for any target smaller than every numeric option
+ *  (since `full`'s cap of `null` is always a valid superset).
+ *
+ *  The "closest cap ≤ target" semantic lets Rust evolve preset
+ *  values (e.g. `SNS::max_long_edge` raised from 1920 → 2048)
+ *  without breaking the picker: a 2048-cap preset selects FHD
+ *  (1920), still within the preset's promise. */
 export const longEdgeKeyFor = (maxLongEdge: number | null): LongEdgeKey => {
-  for (const [key, info] of Object.entries(LONG_EDGE_OPTIONS)) {
-    if (info.maxLongEdge === maxLongEdge) return key as LongEdgeKey;
+  if (maxLongEdge === null) return 'full';
+  let best: LongEdgeKey = 'full';
+  let bestCap = -1;
+  for (const k of Object.keys(LONG_EDGE_OPTIONS) as LongEdgeKey[]) {
+    const v = LONG_EDGE_OPTIONS[k].maxLongEdge;
+    if (v !== null && v <= maxLongEdge && v > bestCap) {
+      best = k;
+      bestCap = v;
+    }
   }
-  return 'full';
+  return best;
 };
 
 /** Derive the *effective* source long edge from the current
@@ -62,7 +64,7 @@ export const sourceLongEdgeOf = (
 
 /** Pick the appropriate Long-edge key given a measured source
  *  size and the currently-selected key. If the selected cap is
- *  larger than the source can deliver, snap to the largest
+ *  larger than the source can deliver, snap to the largest valid
  *  numeric cap that *does* fit; if even HD is larger than the
  *  source, fall back to `'full'` (always valid — its "cap" is
  *  null = source-size). When `sourceLongEdge` is null (= no
@@ -85,3 +87,18 @@ export const pickAutoDemoteKey = (
   }
   return best;
 };
+
+/** UI display name for a canonical Rust preset label. The
+ *  segmented control shows these strings; the `label` field on
+ *  the Rust-side `Preset` is the kebab-case canonical identifier.
+ *  Unknown labels (a new Rust preset that hasn't landed here yet)
+ *  fall back to the raw label rather than throwing, so a Rust
+ *  addition surfaces as a visible-but-unstyled control rather
+ *  than a runtime error. */
+const PRESET_DISPLAY_NAMES: Record<string, string> = {
+  sns: 'SNS',
+  standard: 'Standard',
+  maximum: 'Maximum',
+};
+
+export const presetDisplayName = (label: string): string => PRESET_DISPLAY_NAMES[label] ?? label;

@@ -5,7 +5,7 @@ import { AppHeader } from './components/AppHeader';
 import { CanvasPreview } from './components/CanvasPreview';
 import { SidebarControls } from './components/SidebarControls';
 import { type DroppedFile, DropZone } from './DropZone';
-import { disposeWorker, getWorker } from './frame-client';
+import { disposeWorker, getWorker, type Preset } from './frame-client';
 import { Gallery } from './Gallery';
 import { sourceLongEdgeOf } from './lib/long-edge';
 import { createAppSettings } from './state/app-settings';
@@ -14,7 +14,14 @@ import { createPreviewSession } from './state/preview-session';
 
 type Mode = 'empty' | 'single' | 'batch';
 
-export const App = () => {
+type AppProps = {
+  /** Resolved at boot via `loadPresets()` so the shell receives the
+   *  Rust-side `PipelineSpec::PRESETS` table as a single typed prop.
+   *  See `main.tsx` for the bootstrap. */
+  presets: readonly Preset[];
+};
+
+export const App = (props: AppProps) => {
   // ── session source (inline — small, App-only) ─────────────────
   // The three signals below define which mode the shell is in: a
   // single image, a batch, or empty. Everything downstream (sessions,
@@ -33,7 +40,7 @@ export const App = () => {
   const sourceLongEdge = createMemo<number | null>(() => sourceLongEdgeOf(single(), batchFiles()));
 
   // ── settings + sessions ───────────────────────────────────────
-  const settings = createAppSettings({ sourceLongEdge });
+  const settings = createAppSettings({ presets: props.presets, sourceLongEdge });
 
   const preview = createPreviewSession({
     source: single,

@@ -20,6 +20,7 @@
 import { type Accessor, createEffect, type JSX, onCleanup, onMount } from 'solid-js';
 import type { PreparedPixels } from '../frame-client';
 import { computePaintLayout } from '../lib/paint-preview';
+import { withViewTransition } from '../lib/view-transition';
 import { previewCanvas, previewFrame } from './CanvasPreview.styles';
 
 type Props = {
@@ -27,26 +28,6 @@ type Props = {
   /** Inline `width` / `height` for the wrapper, or null until the
    *  stage is measured and the source aspect is known. */
   frameSize: Accessor<{ width: string; height: string } | null>;
-};
-
-// View Transitions API wrapper — Chrome 111+/Safari 18+/Firefox 132+
-// (~Nov 2024) implement `startViewTransition`. The browser takes a
-// screenshot of the marked element (= the preview canvas, via
-// `view-transition-name: preview-canvas` in the styles below),
-// runs the synchronous DOM mutation in `cb`, then GPU-crossfades
-// the screenshot into the post-mutation state. The fallback for
-// older engines is the hard cut we had before — which, combined
-// with the stale-while-revalidate variant cache, still reads as
-// smooth, just without the fade.
-const withViewTransition = (cb: () => void): void => {
-  const docVT = document as Document & {
-    startViewTransition?: (callback: () => void) => unknown;
-  };
-  if (typeof docVT.startViewTransition === 'function') {
-    docVT.startViewTransition(cb);
-  } else {
-    cb();
-  }
 };
 
 const paint = (canvas: HTMLCanvasElement, pixels: PreparedPixels): void => {

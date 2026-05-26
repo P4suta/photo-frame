@@ -18,36 +18,27 @@
  * The request/response correlation lives in `lib/worker-channel.ts`
  * behind a `MessageTarget` seam so it can be exercised against a fake
  * target without spinning up a real Worker.
+ *
+ * Every type the UI speaks in for render configuration — `PipelineSpec`,
+ * `FrameTheme`, `CaptionLayout`, `MetaPolicy`, `Preset` — is the
+ * `tsify`-generated mirror of the Rust truth, re-exported from
+ * `pkg/`. There is no hand-rolled JS-side shape for the boundary
+ * contract; a drift in the Rust struct surfaces as a `bun run
+ * typecheck` error here.
  */
 
+import type {
+  CaptionLayout,
+  FrameStyle,
+  FrameTheme,
+  MetaPolicy,
+  PipelineSpec,
+  Preset,
+} from '../pkg/photo_frame_wasm';
 import type { EncodedReply, PreparedReply, WorkerReply, WorkerRequest } from './frame-worker';
 import { createRequestIdAllocator, exchange, type MessageTarget } from './lib/worker-channel';
 
-/**
- * Frame theme — pair of border colour and caption text colour.
- * Mirror of `FrameTheme::label()` on the Rust side.
- */
-export type FrameTheme = 'paper' | 'ink';
-
-/**
- * Caption arrangement. Mirror of `CaptionLayout::label()` on the Rust
- * side — `edges` is the four-corner liit-style row; `centered` joins
- * each row with `·` and centres it.
- */
-export type CaptionLayout = 'edges' | 'centered';
-
-/** Frame-only options consumed by [`render_pixels`] (no quality). */
-export type FrameOptionsForPrepare = {
-  theme: FrameTheme;
-  layout: CaptionLayout;
-  show_meta: boolean;
-  max_long_edge: number | null;
-};
-
-/** Full pipeline options consumed by `frame_batch` (atomic encode). */
-export type PipelineOptions = FrameOptionsForPrepare & {
-  jpeg_quality: number;
-};
+export type { CaptionLayout, FrameStyle, FrameTheme, MetaPolicy, PipelineSpec, Preset };
 
 export type PreparedPixels = {
   rgba: Uint8Array;
@@ -92,7 +83,7 @@ export const _preparePixelsOn = async (
   target: MessageTarget,
   requestId: number,
   bytes: Uint8Array,
-  frameOptions: FrameOptionsForPrepare,
+  spec: PipelineSpec,
 ): Promise<PreparedPixels> => {
   const transferred = bytes.slice();
   const reply = await exchange<WorkerRequest & { requestId: number }, WorkerReply, PreparedReply>(
@@ -101,7 +92,7 @@ export const _preparePixelsOn = async (
       kind: 'prepare',
       requestId,
       bytes: transferred,
-      frameOptions,
+      spec,
     },
     isPreparedReply,
     [transferred.buffer],
@@ -138,11 +129,13 @@ export const _encodeJpegOn = async (
  * Decode `bytes` and render the framed RGBA8 grid in the worker. The
  * returned `rgba` is a fresh buffer (the worker transferred it back) so
  * the caller can keep it around indefinitely.
+ *
+ * `spec.jpeg_quality` is ignored by the render path — encode lives in
+ * `encodeJpeg`. We pass the full spec anyway so the call site doesn't
+ * have to project a partial subset.
  */
-export const preparePixels = (
-  bytes: Uint8Array,
-  frameOptions: FrameOptionsForPrepare,
-): Promise<PreparedPixels> => _preparePixelsOn(getWorker(), allocRequestId(), bytes, frameOptions);
+export const preparePixels = (bytes: Uint8Array, spec: PipelineSpec): Promise<PreparedPixels> =>
+  _preparePixelsOn(getWorker(), allocRequestId(), bytes, spec);
 
 /**
  * Encode an RGBA8 buffer at the given JPEG quality in the worker. The
@@ -168,14 +161,19 @@ export const encodeJpeg = (
  * makes the thumbnail and the eventual full-resolution pass share
  * one decode — generating thumbnails for an N-file batch costs N
  * decodes plus 2N frame stages, not 2N decodes.
+ *
+ * `baseSpec` carries theme / layout / meta_policy from the user's
+ * current settings; we override `max_long_edge` to clamp the thumb
+ * and `jpeg_quality` to the (lower) thumb quality.
  */
 export const generateThumbnailBlob = async (
   bytes: Uint8Array,
-  options: Omit<FrameOptionsForPrepare, 'max_long_edge'>,
+  baseSpec: PipelineSpec,
   longEdge: number,
   quality = 70,
 ): Promise<Blob> => {
-  const pixels = await preparePixels(bytes, { ...options, max_long_edge: longEdge });
+  const thumbSpec: PipelineSpec = { ...baseSpec, max_long_edge: longEdge };
+  const pixels = await preparePixels(bytes, thumbSpec);
   const jpeg = await encodeJpeg(pixels.rgba, pixels.width, pixels.height, quality);
   const buffer = new ArrayBuffer(jpeg.byteLength);
   new Uint8Array(buffer).set(jpeg);
@@ -190,3 +188,38 @@ export const generateThumbnailBlob = async (
  */
 export type { BatchItem, BatchResult, WorkerReply, WorkerRequest } from './frame-worker';
 export { getWorker };
+
+// ── boot-time preset fetch ──────────────────────────────────────────────
+//
+// The canonical preset table lives in Rust (`PipelineSpec::PRESETS`).
+// `loadPresets()` initialises the main-thread WASM instance once and
+// returns the typed `Preset[]` so the UI can build its preset segmented
+// from the same source of truth that the renderer consumes. The result
+// is memoised — subsequent calls hit the cache, including across
+// remounts during HMR.
+//
+// Lives in the main thread (not the worker) because the call site is
+// the UI bootstrap (`main.tsx`) and there is no benefit to round-
+// tripping a 200-byte payload through `postMessage` when the WASM
+// load is already cached by the browser.
+//
+// The WASM module is loaded via dynamic `import()` so the bundle keeps
+// `pkg/photo_frame_wasm.js` in its own chunk. A static import here
+// would force Vite to inline the chunk into the main entry — which it
+// is also dynamically imported from the rayon worker helpers, and
+// mixing the two import modes triggers the `INEFFECTIVE_DYNAMIC_IMPORT`
+// build warning. Dynamic on both sides keeps the chunk split clean.
+
+let presetsCache: readonly Preset[] | null = null;
+let presetsPromise: Promise<readonly Preset[]> | null = null;
+
+export const loadPresets = async (): Promise<readonly Preset[]> => {
+  if (presetsCache) return presetsCache;
+  presetsPromise ??= (async () => {
+    const wasm = await import('../pkg/photo_frame_wasm');
+    await wasm.default();
+    presetsCache = wasm.getPresets();
+    return presetsCache;
+  })();
+  return presetsPromise;
+};

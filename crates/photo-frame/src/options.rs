@@ -30,6 +30,7 @@ impl PipelineOptions {
     pub fn from_spec(spec: PipelineSpec) -> Self {
         Self {
             frame: FrameOptions {
+                frame_style: spec.frame_style,
                 theme: spec.theme,
                 layout: spec.layout,
                 meta_policy: spec.meta_policy,

@@ -11,14 +11,19 @@
 use image::Rgba;
 use photo_frame_types::Rgba8;
 
-pub use photo_frame_types::{CaptionLayout, FrameTheme, MetaPolicy};
+pub use photo_frame_types::{CaptionLayout, FrameStyle, FrameTheme, MetaPolicy};
 
 /// Configuration for [`crate::render()`].
 #[derive(Clone, Debug, Default)]
 pub struct FrameOptions {
+    /// Outer canvas silhouette. See [`FrameStyle`].
+    pub frame_style: FrameStyle,
     /// Paired frame colour + caption ink. See [`FrameTheme`].
     pub theme: FrameTheme,
-    /// How the caption strip distributes its facets. See [`CaptionLayout`].
+    /// How the caption text is arranged inside the standard-style
+    /// frame. Ignored when [`Self::frame_style`] is
+    /// [`FrameStyle::Polaroid`] (Polaroid always centres its caption).
+    /// See [`CaptionLayout`].
     pub layout: CaptionLayout,
     /// Whether the metadata strip is drawn at all. See [`MetaPolicy`].
     pub meta_policy: MetaPolicy,
@@ -37,13 +42,14 @@ pub(crate) const fn to_image_rgba(color: Rgba8) -> Rgba<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{to_image_rgba, CaptionLayout, FrameOptions, FrameTheme, MetaPolicy};
+    use super::{to_image_rgba, CaptionLayout, FrameOptions, FrameStyle, FrameTheme, MetaPolicy};
     use image::Rgba;
     use photo_frame_types::Rgba8;
 
     #[test]
-    fn default_options_are_paper_edges_auto_meta_no_downscale() {
+    fn default_options_are_standard_paper_edges_auto_meta_no_downscale() {
         let opts = FrameOptions::default();
+        assert_eq!(opts.frame_style, FrameStyle::Standard);
         assert_eq!(opts.theme, FrameTheme::Paper);
         assert_eq!(opts.layout, CaptionLayout::Edges);
         assert_eq!(opts.meta_policy, MetaPolicy::Auto);

@@ -1,8 +1,15 @@
 import { createRoot, createSignal } from 'solid-js';
 import { describe, expect, test, vi } from 'vitest';
 import type { DroppedFile } from '../DropZone';
-import type { CaptionLayout, FrameTheme, PreparedPixels } from '../frame-client';
-import type { LongEdgeKey, PresetKey } from '../lib/long-edge';
+import type {
+  CaptionLayout,
+  FrameStyle,
+  FrameTheme,
+  MetaPolicy,
+  PipelineSpec,
+  PreparedPixels,
+} from '../frame-client';
+import type { LongEdgeKey } from '../lib/long-edge';
 import type { AppSettings } from './app-settings';
 import { createPreviewSession } from './preview-session';
 
@@ -36,27 +43,25 @@ const file = (name: string, longEdge = 1000): DroppedFile => ({
 const fakeSettings = (
   theme: () => FrameTheme,
   layout: () => CaptionLayout,
-  showMeta: () => boolean,
+  metaPolicy: () => MetaPolicy,
+  frameStyle: () => FrameStyle = () => 'standard',
 ): AppSettings['state'] => ({
-  preset: (() => 'standard') as () => PresetKey,
+  preset: () => 'standard',
   quality: () => 92,
   longEdge: (() => 'full') as () => LongEdgeKey,
+  frameStyle,
   theme,
   layout,
-  showMeta,
+  metaPolicy,
   effectiveMaxLongEdge: () => null,
-  buildFrameOptions: () => ({
+  presets: () => [],
+  buildSpec: (maxLongEdge): PipelineSpec => ({
+    frame_style: frameStyle(),
     theme: theme(),
     layout: layout(),
-    show_meta: showMeta(),
-    max_long_edge: null,
-  }),
-  buildPipelineOptions: () => ({
-    theme: theme(),
-    layout: layout(),
-    show_meta: showMeta(),
-    max_long_edge: null,
+    meta_policy: metaPolicy(),
     jpeg_quality: 92,
+    max_long_edge: maxLongEdge,
   }),
 });
 
@@ -66,10 +71,10 @@ describe('createPreviewSession', () => {
       const [source] = createSignal<DroppedFile | null>(null);
       const [theme] = createSignal<FrameTheme>('paper');
       const [layout] = createSignal<CaptionLayout>('edges');
-      const [showMeta] = createSignal<boolean>(true);
+      const [metaPolicy] = createSignal<MetaPolicy>('auto');
       const preview = createPreviewSession({
         source,
-        settings: fakeSettings(theme, layout, showMeta),
+        settings: fakeSettings(theme, layout, metaPolicy),
         setStatus: () => undefined,
       });
       expect(preview.state.pixels()).toBeNull();
@@ -82,9 +87,7 @@ describe('createPreviewSession', () => {
   test('source change triggers a prepare; pixels() lands after the worker resolves', async () => {
     vi.mocked(preparePixels).mockReset();
     let resolveFirst: ((p: PreparedPixels) => void) | null = null;
-    vi.mocked(preparePixels).mockImplementation((_bytes, _opts) => {
-      // Capture the first call so we can observe before / after
-      // resolution; subsequent prefetch calls resolve immediately.
+    vi.mocked(preparePixels).mockImplementation((_bytes, _spec) => {
       if (resolveFirst === null) {
         return new Promise<PreparedPixels>((r) => {
           resolveFirst = r;
@@ -98,23 +101,19 @@ describe('createPreviewSession', () => {
         const [source, setSource] = createSignal<DroppedFile | null>(null);
         const [theme] = createSignal<FrameTheme>('paper');
         const [layout] = createSignal<CaptionLayout>('edges');
-        const [showMeta] = createSignal<boolean>(true);
+        const [metaPolicy] = createSignal<MetaPolicy>('auto');
         const preview = createPreviewSession({
           source,
-          settings: fakeSettings(theme, layout, showMeta),
+          settings: fakeSettings(theme, layout, metaPolicy),
           setStatus: () => undefined,
         });
 
         setSource(file('a.jpg'));
-        await Promise.resolve(); // flush scope effect
+        await Promise.resolve();
 
-        // Before the first prepare resolves, pixels is still null.
         expect(preview.state.pixels()).toBeNull();
 
-        // Resolve the in-flight prepare.
         resolveFirst?.(px(99));
-        // Drain microtasks so the await in runPreparePromise + the
-        // setVariants signal write propagate.
         await Promise.resolve();
         await Promise.resolve();
 
@@ -142,21 +141,18 @@ describe('createPreviewSession', () => {
         const [source, setSource] = createSignal<DroppedFile | null>(null);
         const [theme] = createSignal<FrameTheme>('paper');
         const [layout] = createSignal<CaptionLayout>('edges');
-        const [showMeta] = createSignal<boolean>(true);
+        const [metaPolicy] = createSignal<MetaPolicy>('auto');
         const preview = createPreviewSession({
           source,
-          settings: fakeSettings(theme, layout, showMeta),
+          settings: fakeSettings(theme, layout, metaPolicy),
           setStatus: () => undefined,
         });
 
         setSource(file('a.jpg'));
         await Promise.resolve();
 
-        // Reset before the in-flight prepare lands.
         preview.dispose();
 
-        // Now resolve — should be ignored by the gate check inside
-        // runPreparePromise.
         resolveFirst?.(px(7));
         await Promise.resolve();
         await Promise.resolve();
@@ -178,10 +174,10 @@ describe('createPreviewSession', () => {
         const [source, setSource] = createSignal<DroppedFile | null>(null);
         const [theme] = createSignal<FrameTheme>('paper');
         const [layout] = createSignal<CaptionLayout>('edges');
-        const [showMeta] = createSignal<boolean>(true);
+        const [metaPolicy] = createSignal<MetaPolicy>('auto');
         createPreviewSession({
           source,
-          settings: fakeSettings(theme, layout, showMeta),
+          settings: fakeSettings(theme, layout, metaPolicy),
           setStatus: (s) => statuses.push(s),
         });
 
@@ -190,10 +186,44 @@ describe('createPreviewSession', () => {
         await Promise.resolve();
         await Promise.resolve();
 
-        // Should have at least seen 'Framing preview…' and then
-        // an empty-string clear when the first prepare lands.
         expect(statuses).toContain('Framing preview…');
         expect(statuses).toContain('');
+        dispose();
+        finish();
+      });
+    });
+  });
+
+  test('prepare receives a PipelineSpec carrying the current frame settings', async () => {
+    vi.mocked(preparePixels).mockReset();
+    vi.mocked(preparePixels).mockResolvedValue(px(2));
+
+    await new Promise<void>((finish) => {
+      createRoot(async (dispose) => {
+        const [source, setSource] = createSignal<DroppedFile | null>(null);
+        const [theme] = createSignal<FrameTheme>('ink');
+        const [layout] = createSignal<CaptionLayout>('centered');
+        const [metaPolicy] = createSignal<MetaPolicy>('never');
+        const [frameStyle] = createSignal<FrameStyle>('polaroid');
+        createPreviewSession({
+          source,
+          settings: fakeSettings(theme, layout, metaPolicy, frameStyle),
+          setStatus: () => undefined,
+        });
+
+        setSource(file('a.jpg'));
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const calls = vi.mocked(preparePixels).mock.calls;
+        expect(calls.length).toBeGreaterThan(0);
+        const firstSpec = calls[0]?.[1];
+        expect(firstSpec).toMatchObject({
+          frame_style: 'polaroid',
+          theme: 'ink',
+          layout: 'centered',
+          meta_policy: 'never',
+        });
         dispose();
         finish();
       });

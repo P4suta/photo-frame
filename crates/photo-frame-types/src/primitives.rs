@@ -9,11 +9,23 @@
 //! The shape mirrors the standard library's `NonZeroU32`: `new` returns
 //! `Option<Self>`, accessors are zero-cost, and the wrapped value is
 //! private so the only way in is the validating constructor.
+//!
+//! ## Serde shape
+//!
+//! Every primitive declares `#[serde(try_from = "Inner", into = "Inner")]`
+//! so JSON / WASM consumers see the raw inner value (a number, a string)
+//! and any inbound deserialise goes through the validating constructor.
+//! That means a malformed JSON payload (`"jpeg_quality": 0`) is rejected
+//! at the boundary with a deserialise error — there is no path that
+//! reaches the wider pipeline with an invariant-violating value.
 
 use std::num::NonZeroU32;
 
+use serde::{Deserialize, Serialize};
+
 /// JPEG encoder quality on the canonical `1..=100` scale.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "u8", into = "u8")]
 pub struct JpegQuality(u8);
 
 impl JpegQuality {
@@ -39,8 +51,29 @@ impl JpegQuality {
     }
 }
 
+impl TryFrom<u8> for JpegQuality {
+    type Error = String;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        Self::new(value).ok_or_else(|| {
+            format!(
+                "JPEG quality {value} out of canonical range [{min}, {max}]",
+                min = Self::MIN,
+                max = Self::MAX,
+            )
+        })
+    }
+}
+
+impl From<JpegQuality> for u8 {
+    fn from(value: JpegQuality) -> Self {
+        value.0
+    }
+}
+
 /// Longest-edge pixel cap for a downscale pass. Non-zero by construction.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "u32", into = "u32")]
 pub struct LongEdge(NonZeroU32);
 
 impl LongEdge {
@@ -60,6 +93,20 @@ impl LongEdge {
     }
 }
 
+impl TryFrom<u32> for LongEdge {
+    type Error = String;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        Self::new(value).ok_or_else(|| format!("long-edge pixel cap {value} must be non-zero"))
+    }
+}
+
+impl From<LongEdge> for u32 {
+    fn from(value: LongEdge) -> Self {
+        value.get()
+    }
+}
+
 /// A free-form EXIF string, guaranteed non-empty after trimming whitespace.
 ///
 /// Wraps the raw `String` so call sites can rely on "this is a name a
@@ -71,7 +118,8 @@ impl LongEdge {
 /// returns `Option<&str>`, methods like `.split('/')` and `.starts_with`
 /// reach through, and the `&str` borrow flows into any
 /// `impl AsRef<str>` API.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct ExifString(String);
 
 impl ExifString {
@@ -113,8 +161,23 @@ impl AsRef<str> for ExifString {
     }
 }
 
+impl TryFrom<String> for ExifString {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(value).ok_or_else(|| "EXIF string must be non-empty after trimming".to_owned())
+    }
+}
+
+impl From<ExifString> for String {
+    fn from(value: ExifString) -> Self {
+        value.into_inner()
+    }
+}
+
 /// An aperture f-number — a positive, finite lens setting (e.g. `1.8`, `4.0`).
-#[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
+#[derive(Copy, Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(try_from = "f64", into = "f64")]
 pub struct Fnumber(f64);
 
 impl Fnumber {
@@ -132,9 +195,24 @@ impl Fnumber {
     }
 }
 
+impl TryFrom<f64> for Fnumber {
+    type Error = String;
+
+    fn try_from(value: f64) -> Result<Self, Self::Error> {
+        Self::new(value).ok_or_else(|| format!("f-number {value} must be positive and finite"))
+    }
+}
+
+impl From<Fnumber> for f64 {
+    fn from(value: Fnumber) -> Self {
+        value.0
+    }
+}
+
 /// Lens focal length in millimetres — positive, finite. Stored as
 /// the *actual* (un-cropped) focal length the camera reported.
-#[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
+#[derive(Copy, Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(try_from = "f64", into = "f64")]
 pub struct FocalLengthMm(f64);
 
 impl FocalLengthMm {
@@ -152,12 +230,28 @@ impl FocalLengthMm {
     }
 }
 
+impl TryFrom<f64> for FocalLengthMm {
+    type Error = String;
+
+    fn try_from(value: f64) -> Result<Self, Self::Error> {
+        Self::new(value)
+            .ok_or_else(|| format!("focal length {value} mm must be positive and finite"))
+    }
+}
+
+impl From<FocalLengthMm> for f64 {
+    fn from(value: FocalLengthMm) -> Self {
+        value.0
+    }
+}
+
 /// Exposure time in seconds — positive, finite.
 ///
 /// Spans the practical camera range (~`1.0 / 8000.0` for fast
 /// electronic shutters up to minutes for bulb exposures); the newtype
 /// only refuses obviously nonsensical zeros, negatives, and NaN/∞.
-#[derive(Copy, Clone, Debug, PartialEq, PartialOrd)]
+#[derive(Copy, Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(try_from = "f64", into = "f64")]
 pub struct ShutterSeconds(f64);
 
 impl ShutterSeconds {
@@ -175,6 +269,21 @@ impl ShutterSeconds {
     }
 }
 
+impl TryFrom<f64> for ShutterSeconds {
+    type Error = String;
+
+    fn try_from(value: f64) -> Result<Self, Self::Error> {
+        Self::new(value)
+            .ok_or_else(|| format!("shutter time {value} s must be positive and finite"))
+    }
+}
+
+impl From<ShutterSeconds> for f64 {
+    fn from(value: ShutterSeconds) -> Self {
+        value.0
+    }
+}
+
 /// Shared invariant the three physical f64 newtypes (`Fnumber`,
 /// `FocalLengthMm`, `ShutterSeconds`) all enforce.
 fn positive_finite(value: f64) -> Option<f64> {
@@ -186,7 +295,8 @@ fn positive_finite(value: f64) -> Option<f64> {
 }
 
 /// ISO sensitivity reading (non-zero).
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "u32", into = "u32")]
 pub struct IsoSensitivity(NonZeroU32);
 
 impl IsoSensitivity {
@@ -206,13 +316,31 @@ impl IsoSensitivity {
     }
 }
 
+impl TryFrom<u32> for IsoSensitivity {
+    type Error = String;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        Self::new(value).ok_or_else(|| format!("ISO sensitivity {value} must be non-zero"))
+    }
+}
+
+impl From<IsoSensitivity> for u32 {
+    fn from(value: IsoSensitivity) -> Self {
+        value.get()
+    }
+}
+
 /// Image dimensions in pixels with both axes guaranteed non-zero.
 ///
 /// A `Dimensions` value is the canonical "size of a raster grid"
 /// vocabulary across the workspace — anywhere a `(width, height)` pair
 /// needs to carry the "both axes positive" invariant, the newtype takes
 /// over from the bare tuple.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+///
+/// Serialises as `{"width": u32, "height": u32}`. Inbound deserialise
+/// goes through `NonZeroU32`'s own validating impl, so a JSON payload
+/// with a zero in either axis is rejected at the wire boundary.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Dimensions {
     width: NonZeroU32,
     height: NonZeroU32,
@@ -259,7 +387,9 @@ impl Dimensions {
 /// "four bytes" — so it stays a thin vocabulary item that other crates
 /// can convert into their own colour types (`image::Rgba`, CSS strings,
 /// canvas paint settings) without dragging `image` into `photo-frame-types`.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+///
+/// Serialises as `{"r": u8, "g": u8, "b": u8, "a": u8}`.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Rgba8 {
     /// Red channel, 0..=255.
     pub r: u8,
@@ -404,5 +534,66 @@ mod tests {
     fn rgba8_predefined_palette_matches_pure_values() {
         assert_eq!(Rgba8::WHITE.to_array(), [255, 255, 255, 255]);
         assert_eq!(Rgba8::BLACK.to_array(), [0, 0, 0, 255]);
+    }
+
+    // ── Wire-shape pins ────────────────────────────────────────────────
+    //
+    // These tests pin the JSON / WASM-FFI representation each newtype
+    // exposes to outside consumers (the WASM bridge, structured logs,
+    // any future tsify-typed boundary). A drift in the wire shape is a
+    // breaking change to the JS contract; failing these tests is the
+    // signal that something downstream needs the same update.
+
+    #[test]
+    fn jpeg_quality_serializes_as_raw_number_and_validates_on_deserialize() {
+        let q = JpegQuality::new(78).expect("78 in range");
+        assert_eq!(serde_json::to_string(&q).unwrap(), "78");
+        assert_eq!(serde_json::from_str::<JpegQuality>("78").unwrap().get(), 78,);
+        assert!(serde_json::from_str::<JpegQuality>("0").is_err());
+        assert!(serde_json::from_str::<JpegQuality>("101").is_err());
+    }
+
+    #[test]
+    fn fnumber_serializes_as_raw_number_and_validates_on_deserialize() {
+        let f = Fnumber::new(1.8).expect("positive finite");
+        assert_eq!(serde_json::to_string(&f).unwrap(), "1.8");
+        // Compare bit-for-bit — `serde_json` parses literals via the
+        // standard `f64::from_str` path, so the round-trip preserves
+        // the exact representation. Using `to_bits()` sidesteps the
+        // `clippy::float_cmp` lint without losing precision.
+        assert_eq!(
+            serde_json::from_str::<Fnumber>("1.8")
+                .unwrap()
+                .get()
+                .to_bits(),
+            1.8_f64.to_bits(),
+        );
+        assert!(serde_json::from_str::<Fnumber>("0").is_err());
+        assert!(serde_json::from_str::<Fnumber>("-1").is_err());
+    }
+
+    #[test]
+    fn exif_string_serializes_as_raw_string_and_validates_on_deserialize() {
+        let s = ExifString::new("NIKON Z 5".to_owned()).expect("non-empty");
+        assert_eq!(serde_json::to_string(&s).unwrap(), "\"NIKON Z 5\"");
+        assert_eq!(
+            serde_json::from_str::<ExifString>("\"NIKON Z 5\"")
+                .unwrap()
+                .as_str(),
+            "NIKON Z 5",
+        );
+        assert!(serde_json::from_str::<ExifString>("\"\"").is_err());
+        assert!(serde_json::from_str::<ExifString>("\"   \"").is_err());
+    }
+
+    #[test]
+    fn dimensions_serializes_as_width_height_object_and_validates_on_deserialize() {
+        let d = Dimensions::new(1920, 1080).expect("both axes non-zero");
+        let wire = serde_json::to_string(&d).unwrap();
+        assert_eq!(wire, r#"{"width":1920,"height":1080}"#);
+        let round: Dimensions = serde_json::from_str(&wire).unwrap();
+        assert_eq!(round, d);
+        // NonZeroU32's own deserialize impl rejects 0 at the wire boundary.
+        assert!(serde_json::from_str::<Dimensions>(r#"{"width":0,"height":1}"#).is_err());
     }
 }

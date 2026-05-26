@@ -4,6 +4,7 @@
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
+use tsify::Tsify;
 
 use crate::primitives::Rgba8;
 
@@ -13,7 +14,8 @@ use crate::primitives::Rgba8;
 /// frame with black text" vs "black frame with white text" is one
 /// decision, not two — so the renderer exposes them as one enum
 /// rather than two independent colour fields.
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Tsify, Copy, Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
 #[serde(rename_all = "lowercase")]
 pub enum FrameTheme {
     /// White frame, black ink.
@@ -86,7 +88,8 @@ impl FromStr for FrameTheme {
 }
 
 /// Controls whether the metadata strip is rendered.
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Tsify, Copy, Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
 #[serde(rename_all = "lowercase")]
 pub enum MetaPolicy {
     /// Render the strip iff the [`crate::Provenance`] carries any

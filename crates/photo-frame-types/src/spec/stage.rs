@@ -1,17 +1,15 @@
 //! Stage marker and progress event for the decode → frame → encode pipeline.
 
 use serde::{Deserialize, Serialize};
-#[cfg(target_arch = "wasm32")]
-use tsify_next::Tsify;
+use tsify::Tsify;
 
 /// Marks which pipeline stage has just finished.
 ///
 /// Surfaced through the pipeline's progress callback so long-running
 /// front-ends (the WASM batch path, the CLI's indicatif bar) can drive
 /// an item-internal progress bar.
-#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
-#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Tsify, Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
 #[serde(rename_all = "lowercase")]
 pub enum Stage {
     /// `photo_frame_decode::from_bytes` returned. The pixel buffer and
@@ -50,9 +48,8 @@ impl Stage {
 /// (`stage`), and the cumulative percent that maps to (`percent`,
 /// pre-computed from [`Stage::percent_complete`] so JS / TS consumers
 /// don't need to know the weighting table).
-#[cfg_attr(target_arch = "wasm32", derive(Tsify))]
-#[cfg_attr(target_arch = "wasm32", tsify(into_wasm_abi))]
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Tsify, Clone, Debug, PartialEq, Eq, Serialize)]
+#[tsify(into_wasm_abi)]
 pub struct StageEvent {
     /// Stage that just completed.
     pub stage: Stage,
