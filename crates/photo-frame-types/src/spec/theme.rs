@@ -43,7 +43,7 @@ impl FrameTheme {
     }
 
     /// Short kebab-case label used in tracing events and CLI / WASM
-    /// flag parsing. Pair with [`FrameTheme::from_label`].
+    /// flag parsing. Pair with the `FromStr` impl for the inverse.
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
@@ -101,7 +101,7 @@ pub enum MetaPolicy {
 
 impl MetaPolicy {
     /// Short kebab-case label used in tracing events and CLI flag
-    /// parsing. Pair with [`MetaPolicy::from_label`].
+    /// parsing. Pair with the `FromStr` impl for the inverse.
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {

@@ -6,7 +6,7 @@
 //!
 //! Callers compose a spec one of two ways:
 //!
-//! 1. Pick a [`const`] starting point — [`PipelineSpec::SNS`],
+//! 1. Pick a `const` starting point — [`PipelineSpec::SNS`],
 //!    [`PipelineSpec::STANDARD`], or [`PipelineSpec::MAXIMUM`] — and
 //!    chain `with_*` builders to override individual fields.
 //! 2. Build the struct directly when every field is caller-supplied.

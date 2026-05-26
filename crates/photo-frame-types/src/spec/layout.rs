@@ -41,7 +41,7 @@ pub enum CaptionLayout {
 
 impl CaptionLayout {
     /// Short kebab-case label used in tracing events and CLI / WASM
-    /// flag parsing. Pair with [`CaptionLayout::from_label`].
+    /// flag parsing. Pair with the `FromStr` impl for the inverse.
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {

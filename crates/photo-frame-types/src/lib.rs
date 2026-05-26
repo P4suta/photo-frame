@@ -1,11 +1,13 @@
 //! Canonical data types shared across the photo-frame pipeline.
 //!
 //! Every crate in the workspace (decode, frame, encode, the facade, the CLI,
-//! the WASM bridge) speaks in terms of the types defined here. There are
-//! deliberately **no behaviours** in this crate beyond constructors and
-//! invariant checks — the goal is a thin, dependency-free vocabulary that
-//! the rest of the pipeline can pivot around without circular imports or
-//! upstream-version coupling.
+//! the WASM bridge) speaks in terms of the types defined here. The crate
+//! stays a *thin vocabulary* — its behaviour is limited to validating
+//! constructors, label↔enum parsers, percent-complete tables, and other
+//! lookups that follow mechanically from the data the types already carry.
+//! There is no domain logic, no I/O, and no dependency on the heavier
+//! pipeline crates, so the rest of the workspace can pivot around it
+//! without circular imports or upstream-version coupling.
 //!
 //! The canonical intermediate is [`Photograph`]: a normalized (upright)
 //! pixel grid plus a structured [`Provenance`] that holds capture metadata
