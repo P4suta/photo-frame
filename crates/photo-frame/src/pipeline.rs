@@ -3,7 +3,7 @@
 use miette::Diagnostic;
 use photo_frame_decode::DecodeError;
 use photo_frame_encode::EncodeError;
-use photo_frame_types::{Categorize, Category};
+use photo_frame_types::{Categorize, Category, Stage};
 use thiserror::Error;
 
 use crate::options::PipelineOptions;
@@ -35,22 +35,6 @@ impl Categorize for PipelineError {
             Self::Encode(e) => e.category(),
         }
     }
-}
-
-/// Marks which pipeline stage has just finished, surfaced through
-/// the [`pipeline()`] callback. Used by long-running front-ends
-/// (the WASM batch path) to drive an item-internal progress bar.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum Stage {
-    /// `photo_frame_decode::from_bytes` returned. The pixel buffer
-    /// and EXIF provenance now exist in memory.
-    Decode,
-    /// `photo_frame_frame::render` returned. The framed RGBA8 canvas
-    /// now exists; encoding has not started yet.
-    Frame,
-    /// `photo_frame_encode::jpeg` returned. The JPEG bytes are
-    /// ready to hand back to the caller.
-    Encode,
 }
 
 /// Decode `bytes`, frame the image, and JPEG-encode the result.
@@ -150,7 +134,7 @@ mod tests {
         let input = tiny_jpeg(80, 60);
         let mut stages = Vec::new();
         let out = pipeline(&input, &PipelineOptions::default(), |stage| {
-            stages.push(stage)
+            stages.push(stage);
         })
         .expect("pipeline");
         assert!(!out.is_empty());

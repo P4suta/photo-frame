@@ -19,6 +19,7 @@ mod pixels;
 mod preset;
 mod primitives;
 mod provenance;
+mod spec;
 
 pub use crate::category::{Categorize, Category};
 pub use crate::photograph::Photograph;
@@ -28,3 +29,4 @@ pub use crate::primitives::{
     Dimensions, ExifString, Fnumber, IsoSensitivity, JpegQuality, LongEdge,
 };
 pub use crate::provenance::{Camera, DateTime, Exposure, Lens, Provenance};
+pub use crate::spec::{Stage, StageEvent};

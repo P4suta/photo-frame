@@ -9,10 +9,11 @@
 //! all three without dragging a heavyweight dependency into the
 //! wasm32-unknown-unknown target.
 
+use photo_frame_types::Stage;
 use web_time::Instant;
 
 use crate::options::PipelineOptions;
-use crate::pipeline::{pipeline, PipelineError, Stage};
+use crate::pipeline::{pipeline, PipelineError};
 
 /// Outcome of processing one batch item.
 ///

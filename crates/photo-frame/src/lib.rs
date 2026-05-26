@@ -33,9 +33,9 @@ pub use photo_frame_decode::DecodeError;
 pub use photo_frame_encode::EncodeError;
 pub use photo_frame_types::{
     Camera, Categorize, Category, DateTime, Exposure, Lens, Photograph, PixelError, Pixels,
-    Provenance, QualityPreset,
+    Provenance, QualityPreset, Stage, StageEvent,
 };
 
 pub use crate::batch::{batch_one, BatchOutcome};
 pub use crate::options::PipelineOptions;
-pub use crate::pipeline::{pipeline, PipelineError, Stage};
+pub use crate::pipeline::{pipeline, PipelineError};

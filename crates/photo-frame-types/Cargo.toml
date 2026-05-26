@@ -14,6 +14,13 @@ path = "src/lib.rs"
 [dependencies]
 thiserror = { workspace = true }
 miette    = { workspace = true }
+serde     = { workspace = true }
+
+[dev-dependencies]
+# Used by `spec::stage` tests to pin the canonical FFI encoding of
+# `Stage` (lowercase strings). Production code uses
+# `serde_wasm_bindgen` over in `photo-frame-wasm`, not `serde_json`.
+serde_json = "1"
 
 [lints]
 workspace = true
