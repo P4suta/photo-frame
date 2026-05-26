@@ -8,7 +8,12 @@ use crate::provenance::Provenance;
 /// decode, the input of frame. By the time a `Photograph` exists, the
 /// pixels are already upright (orientation applied) and the metadata is
 /// already parsed into structured primitives.
-#[derive(Clone, Debug, PartialEq)]
+///
+/// Like [`Pixels`], `Photograph` does **not** implement [`Clone`]. Sharing
+/// a decoded photograph (the WASM cache's one job) goes through
+/// `Arc<Photograph>` instead — `Arc::clone` is a refcount bump, while a
+/// `derive(Clone)` would silently copy the ~100 MB pixel grid every time.
+#[derive(Debug, PartialEq)]
 pub struct Photograph {
     /// Decoded RGBA8 pixels, already oriented upright (EXIF orientation
     /// applied at decode time).
@@ -43,9 +48,13 @@ mod tests {
 
     #[test]
     fn new_round_trips_parts() {
+        // `Pixels` doesn't implement `Clone` (see its docstring), so the
+        // equality assertion builds an independent copy from the same
+        // RGBA8 payload — the comparison is on value, not identity.
         let pixels = Pixels::from_rgba8(1, 1, vec![0, 0, 0, 0xFF]).unwrap();
-        let photo = Photograph::new(pixels.clone(), Provenance::default());
-        assert_eq!(photo.pixels, pixels);
+        let expected = Pixels::from_rgba8(1, 1, vec![0, 0, 0, 0xFF]).unwrap();
+        let photo = Photograph::new(pixels, Provenance::default());
+        assert_eq!(photo.pixels, expected);
         assert!(photo.provenance.is_empty());
         assert_eq!(photo.dimensions(), (1, 1));
     }

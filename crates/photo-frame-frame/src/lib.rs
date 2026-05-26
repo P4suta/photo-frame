@@ -25,17 +25,17 @@ pub use photo_frame_types::{Photograph, Pixels};
 
 /// Render `photo` into a framed RGBA8 grid.
 ///
-/// Takes `photo` by value so the decoder's pixel buffer can be moved
-/// straight into the renderer's `RgbaImage` without an intermediate
-/// copy. Callers that need to keep the `Photograph` around can
-/// `clone()` it explicitly before invoking — the explicit clone
-/// makes the cost visible at the call site, instead of paying for
-/// it inside the renderer where every consumer would.
+/// Takes `photo` by shared reference so callers (notably the WASM
+/// cache) can keep an `Arc<Photograph>` around and re-render under
+/// different options without re-running decode. The renderer copies
+/// the pixel buffer once internally (one allocation; ~30 ms at 24 MP)
+/// — the same cost the old by-value signature paid for every cache
+/// hit, just relocated to a single visible spot.
 ///
 /// The result is always a valid [`Pixels`] — the geometry layer
 /// guarantees positive canvas dimensions for any non-zero input
 /// photo, and [`Photograph`] already carries a non-zero [`Pixels`].
 #[must_use]
-pub fn render(photo: Photograph, opts: &FrameOptions) -> Pixels {
+pub fn render(photo: &Photograph, opts: &FrameOptions) -> Pixels {
     render::render(photo, opts)
 }

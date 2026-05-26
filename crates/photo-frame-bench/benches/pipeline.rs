@@ -111,12 +111,9 @@ fn resize_lanczos3_to_sns(bencher: Bencher<'_, '_>, fixture: &Fixture) {
 
 // ─── frame: full render (compose + caption + downscale) ─────────────────
 //
-// `render` now consumes `Photograph` (Phase C1 zero-copy handoff), so
-// each bench iteration needs a fresh copy. `with_inputs` clones the
-// pre-decoded photo outside the timed window — clone is a single
-// `Vec::clone` on the RGBA buffer (~30 ms at 24 MP) vs re-decoding
-// the JPEG (~270 ms) so the bench stays fast and the per-iteration
-// allocation cost stays out of the measured budget.
+// `render` now takes `&Photograph`, so each bench iteration borrows
+// the same pre-decoded photograph — no per-iteration clone, no
+// allocation outside the renderer's own one-shot buffer copy.
 
 #[divan::bench(args = fixtures::all())]
 fn frame(bencher: Bencher<'_, '_>, fixture: &Fixture) {
@@ -124,8 +121,7 @@ fn frame(bencher: Bencher<'_, '_>, fixture: &Fixture) {
     let opts = FrameOptions::default();
     bencher
         .counter(ItemsCount::new(fixture.pixel_count()))
-        .with_inputs(|| photo.clone())
-        .bench_local_values(|photo| render(black_box(photo), black_box(&opts)));
+        .bench_local(|| render(black_box(&photo), black_box(&opts)));
 }
 
 // ─── encode: framed Pixels → JPEG ───────────────────────────────────────
@@ -134,13 +130,13 @@ fn frame(bencher: Bencher<'_, '_>, fixture: &Fixture) {
 // canvas, not the raw decoded pixels — that is the byte path the CLI
 // actually walks. The post-frame canvas is larger than the source by
 // the golden-ratio border, so `bencher.counter` uses the canvas pixel
-// count, not the source's. The pre-render `Photograph` is consumed
+// count, not the source's. The pre-render `Photograph` is borrowed
 // once, outside the timed window, to obtain the framed `Pixels`.
 
 #[divan::bench(args = fixtures::all())]
 fn encode(bencher: Bencher<'_, '_>, fixture: &Fixture) {
     let photo = from_bytes(&fixture.bytes).expect("decode");
-    let pixels: Pixels = render(photo, &FrameOptions::default());
+    let pixels: Pixels = render(&photo, &FrameOptions::default());
     let opts = JpegOptions::default();
     let canvas_px = u64::from(pixels.width()) * u64::from(pixels.height());
     bencher

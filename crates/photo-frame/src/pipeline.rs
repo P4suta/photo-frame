@@ -92,7 +92,7 @@ where
 {
     let photo = photo_frame_decode::from_bytes(bytes)?;
     on_stage(Stage::Decode);
-    let framed = photo_frame_frame::render(photo, &opts.frame);
+    let framed = photo_frame_frame::render(&photo, &opts.frame);
     on_stage(Stage::Frame);
     let out = photo_frame_encode::jpeg(&framed, &opts.jpeg)?;
     on_stage(Stage::Encode);

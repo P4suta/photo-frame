@@ -28,17 +28,13 @@ use crate::text::{Renderer, Weight};
         caption_visible = tracing::field::Empty,
     ),
 )]
-pub(crate) fn render(photo: Photograph, opts: &FrameOptions) -> Pixels {
-    // Destructure the Photograph so the pixel buffer can move into
-    // `ImageBuffer::from_raw` (zero-copy) while the provenance stays
-    // borrowed for caption formatting.
-    let Photograph { pixels, provenance } = photo;
-    let upright = pixels_to_rgba_image(pixels);
+pub(crate) fn render(photo: &Photograph, opts: &FrameOptions) -> Pixels {
+    let upright = pixels_to_rgba_image(&photo.pixels);
     let upright = maybe_downscale(upright, opts.max_long_edge);
 
     let caption = match opts.meta_policy {
         MetaPolicy::Never => Caption::default(),
-        MetaPolicy::Auto => caption_from(&provenance),
+        MetaPolicy::Auto => caption_from(&photo.provenance),
     };
     let caption_visible = !caption.is_empty();
 
@@ -59,15 +55,19 @@ pub(crate) fn render(photo: Photograph, opts: &FrameOptions) -> Pixels {
         .expect("geometry guarantees a positive RGBA8 canvas")
 }
 
-/// Take ownership of the decoder's pixel buffer and reinterpret it as
-/// an `RgbaImage` without copying. `Pixels::into_parts` was designed
-/// for exactly this handoff (`crates/photo-frame-types/src/pixels.rs`)
-/// — `image::ImageBuffer::from_raw` accepts a `Vec<u8>` by move and
-/// does no further allocation.
-fn pixels_to_rgba_image(pixels: Pixels) -> RgbaImage {
-    let (width, height, data) = pixels.into_parts();
-    ImageBuffer::<Rgba<u8>, _>::from_raw(width, height, data)
-        .expect("Pixels invariants guarantee width * height * 4 bytes")
+/// Copy the borrowed `Pixels` payload into an `image::RgbaImage` so
+/// the rest of the pipeline can drive `image`'s mutating APIs. The
+/// copy is unavoidable as long as `ImageBuffer::from_raw` requires an
+/// owned `Vec<u8>` — `Pixels` no longer implements `Clone`, so we
+/// allocate one shared-ownership-safe buffer here instead of letting
+/// callers do it implicitly.
+fn pixels_to_rgba_image(pixels: &Pixels) -> RgbaImage {
+    ImageBuffer::<Rgba<u8>, _>::from_raw(
+        pixels.width(),
+        pixels.height(),
+        pixels.as_rgba8().to_vec(),
+    )
+    .expect("Pixels invariants guarantee width * height * 4 bytes")
 }
 
 fn maybe_downscale(img: RgbaImage, max_long_edge: Option<u32>) -> RgbaImage {
@@ -422,7 +422,7 @@ mod tests {
     #[test]
     fn render_without_caption_canvas_uses_heavier_no_meta_mat() {
         let photo = solid_photo(200, 100, Provenance::default());
-        let out = render(photo, &FrameOptions::default());
+        let out = render(&photo, &FrameOptions::default());
         // No caption → mat doubles to 2·quantum, so canvas widens and
         // heightens by 4·quantum per axis (±2 px rounding tolerance).
         let q = quantum(200, 100);
@@ -440,7 +440,7 @@ mod tests {
             ..Default::default()
         };
         let photo = solid_photo(200, 100, prov);
-        let out = render(photo, &FrameOptions::default());
+        let out = render(&photo, &FrameOptions::default());
         let q = quantum(200, 100);
         // mat = 2·quantum (uniform). canvas.W = photo + 2·mat = +4·q;
         // canvas.H = photo + 3·mat + strip(= 2·q) = +8·q. ±4 px on H.
@@ -464,7 +464,7 @@ mod tests {
             meta_policy: MetaPolicy::Never,
             ..Default::default()
         };
-        let out = render(photo, &opts);
+        let out = render(&photo, &opts);
         // Never forces show_meta=false → no strip, heavier mat
         // (2·quantum) replaces the strip's mass: +4·quantum total
         // (±2 px rounding tolerance).
@@ -480,7 +480,7 @@ mod tests {
             max_long_edge: Some(100),
             ..Default::default()
         };
-        let out = render(photo, &opts);
+        let out = render(&photo, &opts);
         // After downscale 400×200 → 100×50. No caption → 4·quantum
         // per axis (heavier no-meta mat, ±2 px rounding tolerance).
         let q = quantum(100, 50);
@@ -495,7 +495,7 @@ mod tests {
             max_long_edge: Some(100),
             ..Default::default()
         };
-        let out = render(photo, &opts);
+        let out = render(&photo, &opts);
         // 80×40 already ≤ 100: no downscale. No caption → heavier mat.
         let q = quantum(80, 40);
         assert!(out.width().abs_diff(80 + 4 * q) <= 2);
@@ -505,7 +505,7 @@ mod tests {
     #[test]
     fn rendered_buffer_length_matches_dimensions() {
         let photo = solid_photo(80, 60, Provenance::default());
-        let out = render(photo, &FrameOptions::default());
+        let out = render(&photo, &FrameOptions::default());
         assert_eq!(
             out.as_rgba8().len(),
             (out.width() * out.height() * 4) as usize
@@ -518,7 +518,7 @@ mod tests {
         use image::Rgba;
         let photo = solid_photo(80, 60, Provenance::default());
         let out = render(
-            photo,
+            &photo,
             &FrameOptions {
                 theme: FrameTheme::Ink,
                 ..Default::default()
@@ -542,7 +542,7 @@ mod tests {
     fn paper_theme_paints_corner_pixels_with_white() {
         use image::Rgba;
         let photo = solid_photo(80, 60, Provenance::default());
-        let out = render(photo, &FrameOptions::default());
+        let out = render(&photo, &FrameOptions::default());
         let buf = out.as_rgba8();
         assert_eq!(&buf[0..4], Rgba([255, 255, 255, 255]).0.as_slice());
     }
@@ -569,7 +569,7 @@ mod tests {
             ..Default::default()
         };
         let photo = solid_photo(800, 600, prov);
-        let out = render(photo, &FrameOptions::default());
+        let out = render(&photo, &FrameOptions::default());
         let q = quantum(800, 600);
         assert!(out.width().abs_diff(800 + 4 * q) <= 2);
         assert!(out.height().abs_diff(600 + 8 * q) <= 4);

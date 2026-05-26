@@ -22,7 +22,7 @@
 
 use std::error::Error;
 use std::fmt::Write;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use js_sys::{Array, Function, Object, Reflect, Uint8Array};
 use photo_frame::encode::JpegOptions;
@@ -93,13 +93,16 @@ pub fn init() {
 //   main thread; rayon-spawned threads use it only inside the renderer
 //   for parallel pixel work, never to call `render_pixels` itself.
 //
-// - **`Photograph` is `Clone`** (derived in `photo-frame-types`).
-//   On a cache hit we clone the cached photo out (one full-image
-//   memcpy) and pass it by value to `render`. The clone cost is
-//   ~30 ms at 24 MP vs the 100–300 ms decode it replaces — still a
-//   big win, and crucially it preserves the Phase C1 zero-copy
-//   handoff into `frame::render` (Photograph by value).
-type CacheEntry = (u64, Photograph);
+// - **`Arc<Photograph>` for sharing, never `Clone`.** `Photograph`
+//   (and the `Pixels` it owns) deliberately does not implement
+//   `Clone` any more — a 24 MP pixel grid is ~100 MB, and copying it
+//   silently on cache hits was the single largest unforced cost in
+//   the preview path. The cache hands every caller an `Arc<Photograph>`
+//   instead; refcount bumps are 1 ns. The renderer takes
+//   `&Photograph`, so the same `Arc` keeps re-rendering against the
+//   same payload without any further copy until the user uploads a
+//   new file.
+type CacheEntry = (u64, Arc<Photograph>);
 static PHOTO_CACHE: OnceLock<Mutex<Option<CacheEntry>>> = OnceLock::new();
 
 fn photo_cache() -> &'static Mutex<Option<CacheEntry>> {
@@ -121,10 +124,11 @@ fn fingerprint(bytes: &[u8]) -> u64 {
     h
 }
 
-/// Either clone the cached `Photograph` (cache hit) or decode + cache
-/// (miss). Returns an owned `Photograph` either way — the renderer
-/// consumes it by value (Phase C1).
-fn cached_or_decode(bytes: &[u8]) -> Result<Photograph, DecodeError> {
+/// Either hand out an `Arc<Photograph>` to the cached entry (hit) or
+/// decode + cache (miss). Cache hits return an `Arc::clone` — one
+/// refcount bump, no pixel copy. The renderer takes `&Photograph`, so
+/// the auto-deref through the `Arc` keeps the whole hot path zero-copy.
+fn cached_or_decode(bytes: &[u8]) -> Result<Arc<Photograph>, DecodeError> {
     let fp = fingerprint(bytes);
     let cache = photo_cache();
     {
@@ -135,7 +139,7 @@ fn cached_or_decode(bytes: &[u8]) -> Result<Photograph, DecodeError> {
                     event_id = "wasm.photo_cache.hit",
                     fp, "photograph cache hit"
                 );
-                return Ok(photo.clone());
+                return Ok(Arc::clone(photo));
             }
         }
     }
@@ -143,11 +147,10 @@ fn cached_or_decode(bytes: &[u8]) -> Result<Photograph, DecodeError> {
         event_id = "wasm.photo_cache.miss",
         fp, "photograph cache miss, decoding"
     );
-    let photo = photo_frame::decode::from_bytes(bytes)?;
-    let stored = photo.clone();
+    let photo = Arc::new(photo_frame::decode::from_bytes(bytes)?);
     {
         let mut guard = cache.lock().expect("photo_cache mutex poisoned");
-        *guard = Some((fp, stored));
+        *guard = Some((fp, Arc::clone(&photo)));
     }
     Ok(photo)
 }
@@ -179,7 +182,7 @@ pub fn render_pixels(bytes: &[u8], frame_options: JsValue) -> Result<JsValue, Js
 
     let photo = cached_or_decode(bytes)
         .map_err(|e| JsError::new(&display_chain(&PipelineError::Decode(e))))?;
-    let framed = photo_frame::frame::render(photo, &frame_opts);
+    let framed = photo_frame::frame::render(&photo, &frame_opts);
     let (width, height, rgba) = framed.into_parts();
     tracing::Span::current().record("width", width);
     tracing::Span::current().record("height", height);

@@ -72,7 +72,16 @@ impl Categorize for PixelError {
 /// decode. Orientation is always already applied — the producer (decoder)
 /// is responsible for handing back a `Pixels` whose `(0, 0)` is the
 /// scene's top-left as a viewer would see it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// `Pixels` deliberately does **not** implement [`Clone`]. A 24 MP grid
+/// is ~100 MB and copying one is rarely what the caller wants; we make
+/// the cost visible by forcing them to spell out a fresh construction
+/// (`Pixels::from_rgba8(w, h, src.as_rgba8().to_vec())`) when they
+/// really do want a copy. Shared ownership is the [`Arc<Photograph>`]
+/// pattern the WASM cache uses.
+///
+/// [`Arc<Photograph>`]: std::sync::Arc
+#[derive(Debug, PartialEq, Eq)]
 pub struct Pixels {
     width: u32,
     height: u32,
