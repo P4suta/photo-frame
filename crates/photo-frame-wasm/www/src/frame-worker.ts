@@ -33,9 +33,10 @@ import init, {
   frame_batch,
   initThreadPool,
   render_pixels,
+  type Stage,
+  type StageEvent,
 } from '../pkg/photo_frame_wasm.js';
 import type { FrameOptionsForPrepare, PipelineOptions } from './frame-client';
-import { type Stage, stageToPercent } from './lib/progress';
 
 export type BatchItem = {
   key: string;
@@ -97,8 +98,10 @@ export type WorkerProgress = {
   /** Last pipeline stage that finished for this item; absent on the
    * initial "item started" event. */
   stage?: Stage;
-  /** Cumulative percent for the current item, 0..100. Derived from
-   * `stage` via {@link stageToPercent}. */
+  /** Cumulative percent for the current item, 0..100. Rust computes
+   * this from {@link Stage.percent_complete} and rides it across the
+   * boundary inside `StageEvent`, so the JS side never carries a
+   * parallel lookup table. */
   percent: number;
 };
 export type WorkerDone = { kind: 'done'; results: BatchResult[] };
@@ -196,18 +199,18 @@ self.addEventListener('message', async (event: MessageEvent<WorkerRequest>) => {
     case 'batch': {
       try {
         // The Rust `frame_batch` fires this callback once per
-        // pipeline stage (decode → frame → encode) for every item,
-        // so the main thread sees a steady stream of stage events
-        // and can drive a smooth per-item progress bar.
-        const onStage = (event: { index: number; total: number; key: string; stage: string }) => {
-          const stage = event.stage as Stage;
+        // pipeline stage (decode → frame → encode) for every item.
+        // The event arrives as the `StageEvent` discriminated union
+        // generated from the Rust struct — no casts, no fallback
+        // lookups, percent already computed on the Rust side.
+        const onStage = (event: StageEvent) => {
           post({
             kind: 'progress',
             index: event.index,
             total: event.total,
             key: event.key,
-            stage,
-            percent: stageToPercent(stage),
+            stage: event.stage,
+            percent: event.percent,
           });
         };
         // Each item also emits a "started" event up-front (percent

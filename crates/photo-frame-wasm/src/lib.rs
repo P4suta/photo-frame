@@ -28,7 +28,7 @@ use js_sys::{Array, Function, Object, Reflect, Uint8Array};
 use photo_frame::encode::JpegOptions;
 use photo_frame::frame::{CaptionLayout, FrameOptions, FrameTheme, MetaPolicy};
 use photo_frame::{
-    batch_one, DecodeError, Photograph, PipelineError, PipelineOptions, Pixels, Stage, StageEvent,
+    batch_one, DecodeError, Photograph, PipelineError, PipelineOptions, Pixels, StageEvent,
 };
 use serde::Deserialize;
 use tracing::{debug, error, info, warn};
@@ -313,67 +313,32 @@ pub fn frame_batch(items: &Array, options: JsValue, progress: &Function) -> Resu
 
 /// Hand the typed `StageEvent` to the JS-side `progress` callback.
 ///
-/// The intermediate JS object still uses the hand-built `Reflect::set`
-/// ladder; step 6 swaps it for `serde_wasm_bindgen::to_value(&event)`
-/// so the JS side receives the `tsify`-generated discriminated union
-/// directly without parallel field-by-field copying.
+/// `serde_wasm_bindgen::to_value` round-trips the struct through the
+/// Serde shape that `tsify-next` already emits a `.d.ts` for, so the
+/// JS side receives the exact discriminated union the type system
+/// describes — no parallel field-by-field copying, no string casts.
 fn emit_progress(progress: &Function, event: &StageEvent) {
-    let stage_label = match event.stage {
-        Stage::Decode => "decode",
-        Stage::Frame => "frame",
-        Stage::Encode => "encode",
+    let payload = match serde_wasm_bindgen::to_value(event) {
+        Ok(value) => value,
+        Err(err) => {
+            // Serialising a value we built ourselves should be
+            // impossible to fail — surface it as an error so the
+            // failure isn't a silent dropped progress event.
+            error!(
+                event_id = "wasm.frame_batch.progress.serialize_failed",
+                index = event.index,
+                key = %event.key,
+                error = %err,
+                "failed to serialize StageEvent",
+            );
+            return;
+        },
     };
-    let payload = Object::new();
-    #[allow(
-        clippy::cast_precision_loss,
-        reason = "index and total are bounded by JS array length; well below 2^53"
-    )]
-    let index_f = event.index as f64;
-    if Reflect::set(
-        &payload,
-        &JsValue::from_str("index"),
-        &JsValue::from_f64(index_f),
-    )
-    .is_err()
-        || Reflect::set(
-            &payload,
-            &JsValue::from_str("total"),
-            &JsValue::from_f64(f64::from(event.total)),
-        )
-        .is_err()
-        || Reflect::set(
-            &payload,
-            &JsValue::from_str("key"),
-            &JsValue::from_str(&event.key),
-        )
-        .is_err()
-        || Reflect::set(
-            &payload,
-            &JsValue::from_str("stage"),
-            &JsValue::from_str(stage_label),
-        )
-        .is_err()
-        || Reflect::set(
-            &payload,
-            &JsValue::from_str("percent"),
-            &JsValue::from_f64(f64::from(event.percent)),
-        )
-        .is_err()
-    {
-        warn!(
-            event_id = "wasm.frame_batch.progress.event_build_failed",
-            index = event.index,
-            key = %event.key,
-            stage = stage_label,
-        );
-        return;
-    }
     if let Err(err) = progress.call1(&JsValue::NULL, &payload) {
         warn!(
             event_id = "wasm.frame_batch.progress.callback_threw",
             index = event.index,
             key = %event.key,
-            stage = stage_label,
             error = ?err,
         );
     }
@@ -422,8 +387,8 @@ fn build_frame_options(options: JsValue) -> Result<FrameOptions, JsError> {
         JsError::new(&format!("invalid frame options: {e}"))
     })?;
     Ok(FrameOptions {
-        theme: parse_theme(&opts.theme).map_err(theme_error)?,
-        layout: parse_layout(&opts.layout).map_err(layout_error)?,
+        theme: opts.theme,
+        layout: opts.layout,
         meta_policy: if opts.show_meta {
             MetaPolicy::Auto
         } else {
@@ -447,8 +412,8 @@ fn build_pipeline_options(options: JsValue) -> Result<PipelineOptions, JsError> 
     })?;
     Ok(PipelineOptions {
         frame: FrameOptions {
-            theme: parse_theme(&opts.theme).map_err(theme_error)?,
-            layout: parse_layout(&opts.layout).map_err(layout_error)?,
+            theme: opts.theme,
+            layout: opts.layout,
             meta_policy: if opts.show_meta {
                 MetaPolicy::Auto
             } else {
@@ -460,33 +425,6 @@ fn build_pipeline_options(options: JsValue) -> Result<PipelineOptions, JsError> 
             quality: opts.jpeg_quality,
         },
     })
-}
-
-/// Convert a [`parse_theme`] failure into a [`JsError`] with a structured
-/// tracing event. Kept separate from `parse_theme` so the parser stays a
-/// pure function unit-testable on host targets (where `JsError` can't be
-/// constructed).
-fn theme_error(unknown: &str) -> JsError {
-    error!(
-        event_id = "wasm.theme_invalid",
-        theme = %unknown,
-        "unknown theme; expected `paper` or `ink`",
-    );
-    JsError::new(&format!(
-        "invalid theme `{unknown}`: expected `paper` or `ink`"
-    ))
-}
-
-/// Mirror of [`theme_error`] for the layout enum.
-fn layout_error(unknown: &str) -> JsError {
-    error!(
-        event_id = "wasm.layout_invalid",
-        layout = %unknown,
-        "unknown layout; expected `edges` or `centered`",
-    );
-    JsError::new(&format!(
-        "invalid layout `{unknown}`: expected `edges` or `centered`"
-    ))
 }
 
 /// Render `err` as a single string carrying the full cause chain, mirroring
@@ -507,69 +445,26 @@ fn display_chain(err: &PipelineError) -> String {
 
 /// Frame-only options. `jpeg_quality` is intentionally absent: it lives
 /// on the encode side ([`encode_jpeg`]).
+///
+/// `theme` and `layout` deserialize directly into the typed enums via
+/// the Serde derive on `FrameTheme` / `CaptionLayout` — the JS side
+/// sends the canonical lowercase label and Serde rejects anything else
+/// with `unknown variant` at the boundary.
 #[derive(Debug, Deserialize)]
 struct JsFrameOptions {
-    theme: String,
-    layout: String,
+    theme: FrameTheme,
+    layout: CaptionLayout,
     show_meta: bool,
     max_long_edge: Option<u32>,
 }
 
-/// JS-facing batch options shape. `theme` / `layout` are the kebab-case
-/// labels exposed by [`FrameTheme::label`] and [`CaptionLayout::label`];
-/// see [`parse_theme`] / [`parse_layout`].
+/// JS-facing batch options shape. Same Serde-driven parsing as
+/// [`JsFrameOptions`] with the addition of `jpeg_quality`.
 #[derive(Debug, Deserialize)]
 struct JsPipelineOptions {
     jpeg_quality: u8,
-    theme: String,
-    layout: String,
+    theme: FrameTheme,
+    layout: CaptionLayout,
     show_meta: bool,
     max_long_edge: Option<u32>,
-}
-
-/// Map the JS-side theme label back to the typed enum. Returns the
-/// offending string on failure so the caller can name it in the
-/// diagnostic — this keeps the parser host-testable.
-fn parse_theme(raw: &str) -> Result<FrameTheme, &str> {
-    match raw {
-        s if s == FrameTheme::Paper.label() => Ok(FrameTheme::Paper),
-        s if s == FrameTheme::Ink.label() => Ok(FrameTheme::Ink),
-        other => Err(other),
-    }
-}
-
-/// Map the JS-side layout label back to the typed enum.
-fn parse_layout(raw: &str) -> Result<CaptionLayout, &str> {
-    match raw {
-        s if s == CaptionLayout::Edges.label() => Ok(CaptionLayout::Edges),
-        s if s == CaptionLayout::Centered.label() => Ok(CaptionLayout::Centered),
-        other => Err(other),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{parse_layout, parse_theme, CaptionLayout, FrameTheme};
-
-    #[test]
-    fn parse_theme_accepts_known_labels() {
-        assert_eq!(parse_theme("paper").unwrap(), FrameTheme::Paper);
-        assert_eq!(parse_theme("ink").unwrap(), FrameTheme::Ink);
-    }
-
-    #[test]
-    fn parse_theme_rejects_unknown() {
-        assert_eq!(parse_theme("midnight"), Err("midnight"));
-    }
-
-    #[test]
-    fn parse_layout_accepts_known_labels() {
-        assert_eq!(parse_layout("edges").unwrap(), CaptionLayout::Edges);
-        assert_eq!(parse_layout("centered").unwrap(), CaptionLayout::Centered);
-    }
-
-    #[test]
-    fn parse_layout_rejects_unknown() {
-        assert_eq!(parse_layout("stacked"), Err("stacked"));
-    }
 }
