@@ -10,33 +10,15 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
 
-# ─────────────────────────────────────────────────────────────────────────
-# Phase 2 of the velocity overhaul (see BENCHMARKS.md).
-#
-# The previous single-job "run `just ci` and hope it's fast" was
-# sequential — fmt → clippy → test → wasm-build → web-build — and the
-# wall-clock dominated by the slowest gate. Splitting into independent
-# jobs lets the cluster run them concurrently; each has its own cache
-# namespace so an unrelated change can't invalidate every job's cache.
-#
-# Job topology:
-#   format-lint  — fmt + clippy + biome + taplo + typos + cargo-deny bans
-#   rust-test    — cargo nextest run (+ doc tests), default features
-#   wasm-build   — wasm-pack release bundle, uploaded as artefact
-#   web-build    — bun install + tsc + vite build, *consumes* the wasm
-#                  artefact from rust-test's sibling job to avoid building
-#                  the WASM bundle twice
-#   heif-build   — cargo build/test --features heif inside the
-#                  photo-frame-dev container (separate workflow file
-#                  because the docker build is the dominant cost)
-#
-# Scheduled scans (cargo-deny advisories + licenses) live in
-# .github/workflows/security.yml.
-# ─────────────────────────────────────────────────────────────────────────
+# Reuse the successful main CI run's web bundle for Pages.
+# Optional checks for the `heif` feature run manually through security.yml.
 
 jobs:
   format-lint:
@@ -44,12 +26,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          components: clippy, rustfmt
-          targets: wasm32-unknown-unknown
+          persist-credentials: false
+
+      - name: Install stable Rust components
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update \
+            --component clippy --component rustfmt --target wasm32-unknown-unknown
+          rustup default stable
 
       # `sccache` caches rustc invocations across runs *and* across
       # jobs in the same workflow. The Swatinem step below keeps
@@ -57,29 +42,32 @@ jobs:
       # a cold target/ rehydrates compilation from GitHub Actions
       # cache. The combination drops cold-cache compile time by
       # roughly 2–5× depending on which deps were touched.
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - name: Wire sccache into rustc
         run: |
           echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
           echo 'SCCACHE_GHA_ENABLED=true' >> "$GITHUB_ENV"
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: lint
           # Save on PRs too — `Swatinem` is intra-PR-rerun fast even
           # without main warmth, and sccache amortises cross-job
           # compilation independently. Without this, a long-lived PR
           # eats the full cold-cache cost on every push.
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: latest
+          bun-version-file: crates/photo-frame-wasm/www/package.json
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: just,taplo-cli,typos-cli,cargo-deny
 
       - name: Install biome (via bun)
-        run: bun install -g @biomejs/biome
+        env:
+          # renovate: datasource=npm depName=@biomejs/biome
+          BIOME_VERSION: "2.6.3"
+        run: bun install -g "@biomejs/biome@${BIOME_VERSION}"
 
       - name: fmt-check
         run: just fmt-check
@@ -92,22 +80,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install stable Rust
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
 
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - name: Wire sccache into rustc
         run: |
           echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
           echo 'SCCACHE_GHA_ENABLED=true' >> "$GITHUB_ENV"
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: test
           # Save on PRs too so subsequent pushes to the same PR are
           # warm. sccache handles cross-PR sharing on top.
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: just,cargo-nextest
 
@@ -119,8 +112,8 @@ jobs:
       # divan, fast_image_resize-bench-deps, etc. — ~30 s of cold-
       # cache compile each CI run. Bench code is linted by the
       # `format-lint` job (`cargo clippy --workspace --all-targets`)
-      # and exercised by `runtime-bench.yml`, so coverage is
-      # preserved.
+      # and can be run locally through `just bench` and
+      # `just bench-icount` when performance measurements are needed.
       - name: nextest (ci profile)
         run: cargo nextest run --workspace --lib --bins --tests --profile ci
 
@@ -129,7 +122,7 @@ jobs:
 
       - name: Upload nextest JUnit XML
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: junit-${{ github.run_id }}
           path: target/nextest/ci/junit.xml
@@ -140,19 +133,24 @@ jobs:
     name: wasm / pack
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      # renovate: datasource=crate depName=wasm-pack
+      WASM_PACK_VERSION: "0.15.0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       # Phase F2 — the wasm crate pins a nightly toolchain via its
       # local `rust-toolchain.toml` because `wasm-bindgen-rayon`
       # needs `-Z build-std` to enable wasm atomics. We install
       # nightly + rust-src explicitly so the just recipe doesn't pay
       # the ~60 s download on every CI run.
-      - uses: dtolnay/rust-toolchain@nightly
-        with:
-          toolchain: nightly-2026-04-01
-          targets: wasm32-unknown-unknown
-          components: rust-src
+      - name: Install pinned nightly Rust
+        run: |
+          rustup toolchain install nightly-2026-04-01 --profile minimal --no-self-update \
+            --component rust-src --target wasm32-unknown-unknown
+          rustup default nightly-2026-04-01
 
       # sccache is intentionally NOT wired here. With `-Z build-std`
       # nightly rebuilds the standard library against the per-crate
@@ -164,13 +162,13 @@ jobs:
       # cross-PR cache; the wasm build relies on Swatinem alone, which
       # is still effective at making subsequent pushes to the same PR
       # warm.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: wasm-nightly
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
-          tool: just,wasm-pack
+          tool: just,wasm-pack@${{ env.WASM_PACK_VERSION }}
 
       - name: wasm-pack build
         # `just wasm-build` already strips RUSTUP_TOOLCHAIN before
@@ -181,7 +179,7 @@ jobs:
         run: just wasm-build
 
       - name: Upload WASM bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: wasm-pkg-${{ github.run_id }}
           path: crates/photo-frame-wasm/www/pkg/
@@ -193,14 +191,16 @@ jobs:
     timeout-minutes: 8
     needs: wasm-build
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          bun-version: latest
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: crates/photo-frame-wasm/www/package.json
 
       - name: Download WASM bundle from wasm-build job
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: wasm-pkg-${{ github.run_id }}
           path: crates/photo-frame-wasm/www/pkg/
@@ -217,27 +217,25 @@ jobs:
           mkdir -p public
           cp node_modules/coi-serviceworker/coi-serviceworker.js public/coi-serviceworker.js
           bun run build
-          # Ship the Geist Sans attribution verbatim alongside the WASM
-          # bundle — required by the OFL licence the upstream font is
-          # distributed under. Adding the copy here (rather than in
-          # pages.yml) means the artefact pages.yml consumes is already
-          # release-shaped.
+          # Include the Geist Sans attribution required by the font's license.
           mkdir -p dist/fonts/Geist
           cp ../../photo-frame-frame/assets/fonts/Geist/LICENSE.txt        dist/fonts/Geist/
           cp ../../photo-frame-frame/assets/fonts/Geist/OFL.txt            dist/fonts/Geist/
           cp ../../photo-frame-frame/assets/fonts/Geist/AUTHORS.txt        dist/fonts/Geist/
           cp ../../photo-frame-frame/assets/fonts/Geist/CONTRIBUTORS.txt   dist/fonts/Geist/
 
-      - name: Upload Vite dist for pages.yml to reuse
-        uses: actions/upload-artifact@v4
+      - name: Upload web bundle for Pages
+        if: >-
+          github.repository == 'P4suta/photo-frame' &&
+          github.ref == 'refs/heads/main' &&
+          (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: web-dist-${{ github.run_id }}
           path: crates/photo-frame-wasm/www/dist/
           retention-days: 7
 
-  # The one status check branch protection requires,
-  # named the same in every P4suta repository.
-  # It passes only when every job it needs succeeded or was skipped.
+  # Report the verification result required by branch protection.
   required:
     name: required
     if: always()
@@ -252,3 +250,41 @@ jobs:
         run: |
           echo "${RESULTS}"
           jq -e 'all(.[]; IN("success", "skipped"))' <<< "${RESULTS}"
+
+  pages-upload:
+    name: upload Pages artifact
+    needs: required
+    if: >-
+      github.repository == 'P4suta/photo-frame' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Download the current run's web bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: web-dist-${{ github.run_id }}
+          path: dist/
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
+        with:
+          path: dist
+
+  pages-deploy:
+    name: deploy Pages
+    needs: pages-upload
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pages: write # Publish the Pages deployment.
+      id-token: write # Request an identity token for Pages.
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Deploy Pages
+        id: deploy
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5

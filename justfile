@@ -34,7 +34,7 @@ hooks:
 
 # ── Formatting ───────────────────────────────────────────────────────────────
 
-# Format Rust, TS/JS, TOML in place.
+# Format Rust with Rustfmt, supported files with Biome, and TOML with Taplo.
 fmt:
     cargo fmt --all
     biome format --write .
@@ -54,14 +54,7 @@ lint: lint-rust lint-deps lint-ts lint-typos
 lint-rust:
     cargo clippy --workspace --all-targets -- -D warnings
 
-# Enforce the Pure-Rust dep contract + license / advisory / source gates.
-# The four subchecks mirror what the `security.yml` workflow runs as
-# separate matrix jobs, but bundling them here means `just lint` (and the
-# lefthook pre-push hook that calls it) catches them locally instead of
-# letting CI fail. `bans` enforces the C-toolchain banlist (cc, bindgen,
-# pkg-config, etc.); `licenses` enforces the allow-list in
-# `deny.toml [licenses]`; `advisories` flags known RUSTSEC findings;
-# `sources` restricts deps to crates.io + an explicit allow-list.
+# Check dependency, license, advisory, and source rules before pushing.
 lint-deps:
     cargo deny --workspace check bans licenses advisories sources
 
@@ -121,10 +114,7 @@ copy-coi-sw:
     cp -p crates/photo-frame-wasm/www/node_modules/coi-serviceworker/coi-serviceworker.js \
           crates/photo-frame-wasm/www/public/coi-serviceworker.js
 
-# Build the Vite/SolidJS web bundle on top of the WASM artefact. Mirrors what
-# `.github/workflows/pages.yml` runs on push to main, so `just ci` catches
-# TypeScript or Vite regressions locally instead of letting Pages discover
-# them after the merge.
+# Build the Vite/SolidJS bundle used by the main CI Pages deployment.
 web-build: wasm-build copy-web-fonts
     cd crates/photo-frame-wasm/www && bun install --frozen-lockfile
     just copy-coi-sw
@@ -176,10 +166,9 @@ bench-measure variant="all":
 bench *args:
     cargo bench -p photo-frame-bench --bench pipeline -- "$@"
 
-# Run iai-callgrind instruction-count benches. Requires `valgrind` at
-# the OS level (`apt install valgrind`) plus the `iai-callgrind-runner`
-# binary from mise.toml. Output goes to target/iai/ and is the basis
-# for the runtime-bench CI regression gate.
+# Run iai-callgrind instruction-count benches locally. Requires
+# `valgrind` at the OS level (`apt install valgrind`) plus the
+# `iai-callgrind-runner` binary from mise.toml. Output goes to target/iai/.
 bench-icount *args:
     cargo bench -p photo-frame-bench --bench icount -- "$@"
 

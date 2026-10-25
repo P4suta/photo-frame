@@ -1,6 +1,14 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended", ":semanticCommits", ":dependencyDashboard", "schedule:weekly"],
+  "extends": [
+    "config:recommended",
+    ":semanticCommits",
+    ":dependencyDashboard",
+    "schedule:weekly",
+    "customManagers:biomeVersions",
+    "customManagers:dockerfileVersions",
+    "customManagers:githubActionsVersions"
+  ],
   "labels": ["dependencies"],
   "rangeStrategy": "bump",
   "lockFileMaintenance": { "enabled": true, "schedule": ["before 6am on monday"] },
@@ -61,16 +69,34 @@
       "matchUpdateTypes": ["major"],
       "addLabels": ["major-bump"],
       "automerge": false
-    }
-  ],
-  "customManagers": [
+    },
     {
-      "customType": "regex",
-      "description": "Bump tools pinned via Dockerfile ARG with `# renovate:` comment",
-      "fileMatch": ["^Dockerfile$"],
-      "matchStrings": [
-        "#\\s*renovate:\\s*datasource=(?<datasource>[a-z-]+?)\\s+depName=(?<depName>[^\\s]+?)(?:\\s+versioning=(?<versioning>[a-z-]+?))?\\s*\\nARG\\s+[A-Z_]+_VERSION=(?<currentValue>.+)\\s*$"
-      ]
+      "matchManagers": ["mise"],
+      "matchDepNames": ["biome"],
+      "overrideDatasource": "npm",
+      "overridePackageName": "@biomejs/biome"
+    },
+    {
+      "matchFileNames": ["mise.toml", "Dockerfile", ".github/workflows/ci.yml", "biome.json"],
+      "matchDepNames": ["biome", "@biomejs/biome"],
+      "groupName": "biome",
+      "minimumGroupSize": 4
+    },
+    {
+      "matchManagers": ["mise"],
+      "matchDepNames": ["aqua:rustwasm/wasm-pack"],
+      "overrideDatasource": "crate",
+      "overridePackageName": "wasm-pack"
+    },
+    {
+      "matchDepNames": ["bun"],
+      "groupName": "bun",
+      "minimumGroupSize": 3
+    },
+    {
+      "matchDepNames": ["wasm-pack", "aqua:rustwasm/wasm-pack"],
+      "groupName": "wasm-pack",
+      "minimumGroupSize": 3
     }
   ]
 }

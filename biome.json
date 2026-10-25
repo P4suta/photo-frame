@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.4.15/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.6.3/schema.json",
   "files": {
     "includes": [
       "**",
@@ -22,7 +22,7 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "recommended": true,
+      "preset": "recommended",
       "style": {
         "noNonNullAssertion": "error",
         "useConst": "error",
@@ -45,5 +45,6 @@
       "arrowParentheses": "always"
     }
   },
+  "markdown": { "formatter": { "proseWrap": "preserve" } },
   "assist": { "actions": { "source": { "organizeImports": "on" } } }
 }

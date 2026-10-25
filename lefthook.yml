@@ -16,13 +16,13 @@ pre-commit:
       run: scripts/check-signing.sh config
 
     fmt-rust:
-      glob: '*.rs'
+      glob: "*.rs"
       run: cargo fmt --all -- --check
     fmt-ts:
-      glob: '*.{ts,tsx,js,jsx,json,jsonc}'
+      glob: "*.{ts,tsx,js,jsx,json,jsonc}"
       run: biome format {staged_files}
     fmt-toml:
-      glob: '*.toml'
+      glob: "*.toml"
       run: taplo fmt --check {staged_files}
     typos:
       # `--no-progress` was removed in typos-cli ~1.40; `--quiet` is
@@ -30,7 +30,7 @@ pre-commit:
       # lefthook's structured output rendering.
       run: typos --quiet
     lint-ts:
-      glob: '*.{ts,tsx,js,jsx}'
+      glob: "*.{ts,tsx,js,jsx}"
       run: biome lint {staged_files}
 
 pre-push:

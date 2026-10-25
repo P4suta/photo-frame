@@ -132,7 +132,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # fail with "tempdir: AccessDenied" the first time they ran `bun install`.
 # At runtime, with BUN_INSTALL unset, bun falls back to ~/.bun for those
 # dirs, which the dev user owns under /home/dev.
-RUN BUN_INSTALL=/usr/local bash -c 'curl -fsSL https://bun.sh/install | bash' \
+# renovate: datasource=npm depName=bun
+ARG BUN_VERSION=1.3.14
+RUN BUN_INSTALL=/usr/local bash -c 'curl -fsSL https://bun.sh/install | bash -s -- "bun-v${BUN_VERSION}"' \
  && bun --version \
  && ln -sf "$(which bun)" /usr/local/bin/node
 
@@ -159,13 +161,15 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     cargo install --locked cargo-binstall
 
+# renovate: datasource=crate depName=wasm-pack
+ARG WASM_PACK_VERSION=0.15.0
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     cargo binstall --no-confirm --no-symlinks --force \
         just \
         taplo-cli \
         typos-cli \
-        wasm-pack \
+        "wasm-pack@${WASM_PACK_VERSION}" \
         cargo-deny \
         cargo-nextest \
         hyperfine \
@@ -174,10 +178,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
         inferno \
         iai-callgrind-runner
 
-# npm-published tooling. BUN_INSTALL=/usr/local routes the -g binaries
-# to /usr/local/bin (same reasoning as the bun installer above — kept
-# inline so the runtime env stays clean).
-RUN BUN_INSTALL=/usr/local bun install -g @biomejs/biome lefthook \
+# BUN_INSTALL places global tools in /usr/local/bin.
+# renovate: datasource=npm depName=@biomejs/biome
+ARG BIOME_VERSION=2.6.3
+RUN BUN_INSTALL=/usr/local bun install -g "@biomejs/biome@${BIOME_VERSION}" lefthook \
  && biome --version \
  && lefthook version
 

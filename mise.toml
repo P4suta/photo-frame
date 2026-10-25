@@ -1,19 +1,12 @@
-# mise tool version pins.
-# Docs: https://mise.jdx.dev/
-#
-# Single source of truth for tool versions across host + container +
-# CI. `mise install` in the project root fetches and sets up each
-# tool below; Renovate's regexManager bumps the versions on schedule.
-#
-# Why mise (not asdf, not vendored binaries):
-#   - one-shot bootstrap on any Linux/macOS host
-#   - fast (Rust-based shims)
-#   - already used by the project author elsewhere
-#
-# Rust / cargo themselves come from rustup pin in the Dockerfile
-# (RUST_VERSION ARG); mise focuses on the auxiliary toolchain.
+# Mise manages auxiliary tools for host development.
+# Renovate groups Biome updates across the host, CI, container, and schema.
+# Rust and Cargo use the existing rustup declarations.
 
 [tools]
+biome                     = "2.6.3"
+bun                       = "1.3.14"
+"aqua:rustwasm/wasm-pack" = "0.15.0"
+
 # Tools the Dockerfile already installs via cargo-binstall — listed
 # here so a contributor working on the host (no Docker) can run
 # `mise install` and get the same versions. The Dockerfile remains
