@@ -34,7 +34,7 @@ hooks:
 
 # ── Formatting ───────────────────────────────────────────────────────────────
 
-# Format Rust, TS/JS, TOML in place.
+# Format Rust with Rustfmt, supported files with Biome, and TOML with Taplo.
 fmt:
     cargo fmt --all
     biome format --write .
@@ -54,14 +54,7 @@ lint: lint-rust lint-deps lint-ts lint-typos
 lint-rust:
     cargo clippy --workspace --all-targets -- -D warnings
 
-# Enforce the Pure-Rust dep contract + license / advisory / source gates.
-# The four subchecks mirror what the `security.yml` workflow runs as
-# separate matrix jobs, but bundling them here means `just lint` (and the
-# lefthook pre-push hook that calls it) catches them locally instead of
-# letting CI fail. `bans` enforces the C-toolchain banlist (cc, bindgen,
-# pkg-config, etc.); `licenses` enforces the allow-list in
-# `deny.toml [licenses]`; `advisories` flags known RUSTSEC findings;
-# `sources` restricts deps to crates.io + an explicit allow-list.
+# Check dependency, license, advisory, and source rules before pushing.
 lint-deps:
     cargo deny --workspace check bans licenses advisories sources
 
@@ -81,25 +74,11 @@ test:
 
 # ── WASM ─────────────────────────────────────────────────────────────────────
 
-# `env -u RUSTUP_TOOLCHAIN` strips the host environment's stable pin
-# (mise/devcontainer profile sets RUSTUP_TOOLCHAIN=1.95.0 for the
-# rest of the workspace) so rust-toolchain.toml inside the wasm
-# crate can elect its nightly pin instead. The nightly is needed
-# because `wasm-bindgen-rayon` requires `target-feature=+atomics`,
-# which only works with `-Z build-std` (nightly only). All other
-# `just` recipes inherit the host pin unchanged.
-#
-# `CARGO_UNSTABLE_BUILD_STD` belt-and-braces: the same flag lives
-# in `crates/photo-frame-wasm/.cargo/config.toml` as `[unstable]
-# build-std = [...]`, which works locally but is silently ignored
-# on CI runners (suspected interaction with how `rust-toolchain.toml`
-# + `rustup default` propagate the nightly selection through
-# `wasm-pack`'s cargo invocation). Setting the env var bypasses the
-# config-file resolution entirely; nightly cargo honours it
-# unconditionally, std gets rebuilt with the per-crate
-# `target-feature=+atomics,+bulk-memory,+mutable-globals,+simd128`
-# rustflags, and `wasm-bindgen-rayon`'s cfg-guard sees what it
-# expects.
+# Rebuild the standard library with WebAssembly atomics using the pinned nightly.
+# Build the WebAssembly package without release optimizations for routine checks.
+wasm-check:
+    cd crates/photo-frame-wasm && env -u RUSTFLAGS RUSTUP_TOOLCHAIN=nightly-2026-04-01 CARGO_UNSTABLE_BUILD_STD=panic_abort,std wasm-pack build --target web --dev --out-dir www/pkg
+
 wasm-build:
     cd crates/photo-frame-wasm && env -u RUSTFLAGS RUSTUP_TOOLCHAIN=nightly-2026-04-01 CARGO_UNSTABLE_BUILD_STD=panic_abort,std wasm-pack build --target web --release --out-dir www/pkg
 
@@ -121,10 +100,7 @@ copy-coi-sw:
     cp -p crates/photo-frame-wasm/www/node_modules/coi-serviceworker/coi-serviceworker.js \
           crates/photo-frame-wasm/www/public/coi-serviceworker.js
 
-# Build the Vite/SolidJS web bundle on top of the WASM artefact. Mirrors what
-# `.github/workflows/pages.yml` runs on push to main, so `just ci` catches
-# TypeScript or Vite regressions locally instead of letting Pages discover
-# them after the merge.
+# Build the Vite/SolidJS bundle used by the main CI Pages deployment.
 web-build: wasm-build copy-web-fonts
     cd crates/photo-frame-wasm/www && bun install --frozen-lockfile
     just copy-coi-sw
@@ -176,10 +152,9 @@ bench-measure variant="all":
 bench *args:
     cargo bench -p photo-frame-bench --bench pipeline -- "$@"
 
-# Run iai-callgrind instruction-count benches. Requires `valgrind` at
-# the OS level (`apt install valgrind`) plus the `iai-callgrind-runner`
-# binary from mise.toml. Output goes to target/iai/ and is the basis
-# for the runtime-bench CI regression gate.
+# Run iai-callgrind instruction-count benches locally. Requires
+# `valgrind` at the OS level (`apt install valgrind`) plus the
+# `iai-callgrind-runner` binary from mise.toml. Output goes to target/iai/.
 bench-icount *args:
     cargo bench -p photo-frame-bench --bench icount -- "$@"
 

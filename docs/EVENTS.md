@@ -1,120 +1,184 @@
-# Observability events — specification
+# Observability event specification
 
-Every `tracing::{info,warn,error,debug,trace}!` invocation in the
-workspace emits a structured event with a stable `target` field. This
-document is the **contract**: every event listed below is observable
-under all production deployments (CLI with `--log-format json`,
-the WASM bundle's tracing callback, future telemetry pipelines).
+Every workspace tracing invocation emits a structured event.
+The event has a stable `target` field.
+The invocation can use `tracing::{info,warn,error,debug,trace}!`.
+The listed events form the observability contract for production deployments.
+Consumers include the command-line interface with `--log-format json`.
+They also include the WebAssembly tracing callback and future telemetry pipelines.
 
-If you add an event, add a row here and follow the naming convention.
-If you remove or rename one, treat it as a breaking change to the
-observability contract.
+Add new events to the catalogue and follow the naming convention.
+Removing or renaming an event breaks the observability contract.
 
 ## Naming convention
 
-```
+```text
 <crate>.<stage>.<concept>
 ```
 
-- `crate`  — short name (`decode`, `frame`, `encode`, `pipeline`, `cli`, `wasm`)
-- `stage`  — internal pipeline phase (`exif`, `orientation`, `format`, `io`, …)
-- `concept` — what happened (`applied`, `absent`, `exhausted`, `truncated`, …)
+`crate` names a component.
+Examples include `decode`, `frame`, `encode`, `pipeline`, `cli`, and `wasm`.
+`stage` names an internal pipeline phase.
+Examples include `exif`, `orientation`, `format`, and `io`.
+`concept` describes the occurrence.
+Examples include `applied`, `absent`, `exhausted`, and `truncated`.
 
-Examples: `decode.exif.datetime.exhausted`, `decode.orientation.applied`,
-`wasm.frame.options_invalid`.
+Example identifiers include `decode.exif.datetime.exhausted`.
+Other examples are `decode.orientation.applied` and `wasm.frame.options_invalid`.
 
 ## Severity guidance
 
-- `error` — the operation failed and the caller will see an `Err`. Always paired with the `Err(...)` site.
-- `warn`  — the operation continues, but a fallback or recovery happened that operators may want to know about.
-- `info`  — high-level pipeline transitions: start/finish, configuration choices.
-- `debug` — fallback paths, format detection details, branch decisions.
-- `trace` — fine-grained traces (per-tag presence, per-row processing).
+Use `error` when an operation fails and the caller receives an `Err`.
+Pair every error event with its `Err(...)` site.
+Use `warn` when an operation continues after fallback or recovery.
+Warnings describe conditions that operators may want to know about.
+Use `info` for pipeline transitions and configuration choices.
+Use `debug` for fallback paths, format detection, and branch decisions.
+Use `trace` for details such as tag presence and row processing.
 
 ## Spans
 
-Top-level entry points open INFO spans whose names are stable and
-whose fields are filled in over the span's lifetime via
-`Span::current().record(...)`. Consumers can rely on:
+Top-level entry points open `INFO` spans with stable names.
+They record fields during each span through `Span::current().record(...)`.
+Consumers can rely on the following names and fields at span closure.
 
-| Span name        | Crate    | Fields populated by close                                                       |
-| ---------------- | -------- | ------------------------------------------------------------------------------- |
-| `decode`         | decode   | `input_bytes`, `format`, `width`, `height`, `exif_present`                      |
-| `heif_decode`    | decode   | `bytes`, `width`, `height`, `stride`                                            |
-| `frame_render`  | frame    | `photo_width`, `photo_height`, `canvas_width`, `canvas_height`, `caption_visible` |
-| `encode_jpeg`   | encode   | `width`, `height`, `quality`, `output_bytes`                                    |
-| `pipeline`      | facade   | `input_bytes`, `output_bytes`                                                    |
-| `batch_one`     | facade   | `input_bytes`, `elapsed_ms`                                                      |
-| `run`           | cli      | `inputs`, `preset`, `jobs`, `strict`                                              |
-| `process_one`   | cli      | `inputs`, `input`, `output`                                                      |
-| `wasm_frame`    | wasm     | `input_bytes`, `output_bytes`                                                    |
-| `wasm_frame_batch` | wasm  | `total`, `succeeded`, `failed`                                                   |
+The decode crate opens the `decode` span.
+It records `input_bytes`, `format`, `width`, `height`, and `exif_present`.
+The same crate opens `heif_decode`.
+That span records `bytes`, `width`, `height`, and `stride`.
+
+The frame crate opens `frame_render`.
+It records `photo_width`, `photo_height`, and `canvas_width`.
+Its remaining fields are `canvas_height` and `caption_visible`.
+
+The encode crate opens `encode_jpeg`.
+It records `width`, `height`, `quality`, and `output_bytes`.
+
+The pipeline façade opens `pipeline` and `batch_one`.
+The `pipeline` span records `input_bytes` and `output_bytes`.
+The `batch_one` span records `input_bytes` and `elapsed_ms`.
+
+The command-line interface opens `run` and `process_one`.
+The `run` span records `inputs`, `preset`, `jobs`, and `strict`.
+The `process_one` span records `inputs`, `input`, and `output`.
+
+The WebAssembly crate opens `wasm_frame` and `wasm_frame_batch`.
+The `wasm_frame` span records `input_bytes` and `output_bytes`.
+The `wasm_frame_batch` span records `total`, `succeeded`, and `failed`.
 
 ## Event catalogue
 
-| target | level | crate | fields | when emitted |
-| ------ | ----- | ----- | ------ | ------------ |
-| `decode.format.unsupported`           | debug | decode | `detected` (image::ImageFormat) | `image::guess_format` recognised a format whose decoder we don't compile in (AVIF, HDR, …); treated as Unknown |
-| `decode.orientation.absent`           | trace | decode | —                            | EXIF Orientation tag not present at all |
-| `decode.orientation.unspecified`      | trace | decode | —                            | EXIF Orientation tag = 0 (caller said "unspecified") |
-| `decode.orientation.overflow`         | warn  | decode | `raw` (u32)                  | EXIF Orientation value doesn't fit in u8 — corrupt EXIF |
-| `decode.orientation.unknown`          | warn  | decode | `raw` (u8 → enum miss)       | EXIF Orientation value in 1..255 but not in 1..=8 |
-| `decode.orientation.applied`          | debug | decode | `raw`, `applied`             | Orientation successfully resolved + applied |
-| `decode.exif.parsed`                  | implicit (Parsed variant in `ExifReadOutcome`) | decode | — | EXIF segment parsed; downstream extractors run |
-| (anonymous warn in exif.rs)           | warn  | decode | `error`                      | EXIF segment present but failed to parse |
-| `decode.exif.camera.absent`           | debug | decode | —                            | Neither Make nor Model EXIF tag present |
-| `decode.exif.lens.absent`             | debug | decode | —                            | Neither LensMake nor LensModel EXIF tag present |
-| `decode.exif.exposure.absent`         | debug | decode | —                            | No exposure facts present (focal/aperture/shutter/iso all missing) |
-| `decode.exif.datetime.exhausted`      | debug | decode | `candidates`                 | All three datetime candidate tags (Original/Digitized/DateTime) missing or unparsable |
-| `decode.heif.stride_padding`          | debug | decode (feature=heif) | `stride`, `packed_row` | libheif plane has alignment padding; row-by-row repack happens |
-| `decode.heif.truncated`               | warn  | decode (feature=heif) | `expected_rows`, `got_rows` | libheif plane data shorter than declared stride*height |
-| `wasm.options_invalid`                | error | wasm   | `error`                      | serde-wasm-bindgen failed to deserialise the JS-side options object |
-| `wasm.theme_invalid`                  | error | wasm   | `theme`                      | JS-side theme string didn't match `paper` or `ink` |
-| `wasm.layout_invalid`                 | error | wasm   | `layout`                     | JS-side layout string didn't match `edges` or `centered` |
-| `wasm.frame_batch.done`               | info  | wasm   | `total`, `succeeded`, `failed` | Batch finished (one event per `frame_batch` call) |
-| `cli.batch.started`                   | info  | cli    | `inputs`, `jobs`, `strict`   | Batch run kicked off |
-| `cli.batch.item_done`                 | info  | cli    | `input`, `output`, `elapsed_ms` | A single input finished framing and was written to disk |
-| `cli.batch.summary`                   | info  | cli    | `processed`, `ok`, `failed`, `total_ms`, `avg_ms`, `speedup`, `jobs` | Continue-on-failure run summary (mirrors the stderr text) |
-| (anonymous error in lib.rs)           | error | wasm   | `chain`                      | Pipeline failed; the full source chain rendered as one string before JsError construction |
+### Decode events
 
-Anonymous events (no `target:` override) inherit the file path as
-target, e.g. `photo_frame_decode::exif`. They are listed for
-completeness but should be migrated to the dotted-name convention
-when next touched.
+The debug-level `decode.format.unsupported` event records `detected`.
+Its type is `image::ImageFormat`.
+It occurs when `image::guess_format` recognizes an unavailable decoder format.
+Examples include `AVIF` and `HDR`.
+The decoder treats the format as `Unknown`.
 
-## Error events (paired with `Err(...)` sites)
+The trace-level `decode.orientation.absent` event reports a missing tag.
+The tag is the Exchangeable Image File Format `Orientation` tag.
+The trace-level `decode.orientation.unspecified` event reports tag value 0.
 
-Every error variant the workspace returns from a public `fn` has its
-`Err(...)` construction co-located with a `tracing::error!` event
-carrying:
+The warn-level `decode.orientation.overflow` event records `raw` as a `u32`.
+The orientation value doesn't fit in `u8`, indicating corrupt metadata.
+The warn-level `decode.orientation.unknown` event also records `raw`.
+It follows a `u8` enum miss for a value in `1..255` but outside `1..=8`.
+The debug-level `decode.orientation.applied` event records `raw` and `applied`.
+It follows resolving and applying the orientation.
 
-  - `error.code`     — the miette `#[diagnostic(code = ...)]`
-  - `error.category` — `Categorize::category().label()`
-  - `error.source`   — the wrapped error's `Display` if any
+The `decode.exif.parsed` identifier represents the implicit `Parsed` variant.
+The variant belongs to `ExifReadOutcome`.
+Downstream extractors run after parsing.
+An anonymous warn-level event in `exif.rs` records `error`.
+It occurs when an Exchangeable Image File Format segment fails to parse.
+The segment must be present for that event to occur.
 
-Currently this is enforced by code review (and the docs/EVENTS.md
-update gate); a future Phase could automate it via a custom clippy
-lint or `tracing-error::SpanTrace`.
+The debug-level `decode.exif.camera.absent` event reports missing camera tags.
+Neither `Make` nor `Model` is present.
+The debug-level `decode.exif.lens.absent` event reports missing lens tags.
+Neither `LensMake` nor `LensModel` is present.
+The debug-level `decode.exif.exposure.absent` event reports missing exposure data.
+Focal length, aperture, shutter speed, and photographic sensitivity are missing.
+The sensitivity uses the `ISO` scale.
+The debug-level `decode.exif.datetime.exhausted` event records `candidates`.
+The `Original`, `Digitized`, and `DateTime` tags are all missing or unparsable.
+
+The `heif` feature enables debug-level `decode.heif.stride_padding` events.
+They record `stride` and `packed_row`.
+They occur when libheif plane alignment requires repacking each row.
+The feature also enables warn-level `decode.heif.truncated` events.
+They record `expected_rows` and `got_rows`.
+Plane data is shorter than the declared stride multiplied by height.
+
+### Events from `photo-frame-wasm`
+
+The error-level `wasm.options_invalid` event records `error`.
+`serde-wasm-bindgen` can't deserialize the JavaScript options object.
+The error-level `wasm.theme_invalid` event records `theme`.
+The JavaScript theme value is neither `paper` nor `ink`.
+The error-level `wasm.layout_invalid` event records `layout`.
+The JavaScript layout value is neither `edges` nor `centered`.
+The info-level `wasm.frame_batch.done` event occurs once per `frame_batch` call.
+It records `total`, `succeeded`, and `failed`.
+An anonymous error-level event in `lib.rs` records `chain` on pipeline failure.
+It renders the full source chain as one string before constructing `JsError`.
+
+### Command-line events
+
+The info-level `cli.batch.started` event occurs when a batch run starts.
+It records `inputs`, `jobs`, and `strict`.
+The info-level `cli.batch.item_done` event follows each saved framed image.
+It records `input`, `output`, and `elapsed_ms`.
+The info-level `cli.batch.summary` event describes a continue-on-failure run.
+It records `processed`, `ok`, `failed`, `total_ms`, and `avg_ms`.
+Its remaining fields are `speedup` and `jobs`.
+The fields match the standard error summary.
+
+Anonymous events without a `target:` override inherit the path as target.
+One example is `photo_frame_decode::exif`.
+The catalogue includes anonymous events for completeness.
+Migrate them to the dotted naming convention when changing their source.
+
+## Error events paired with `Err(...)` sites
+
+Every error variant from a public workspace `fn` has a paired event.
+The `Err(...)` construction shares its site with a `tracing::error!` event.
+The event carries `error.code` from miette's `#[diagnostic(code = ...)]`.
+It also carries `error.category` from `Categorize::category().label()`.
+When present, `error.source` carries the wrapped error's `Display` value.
+
+Code review and the `docs/EVENTS.md` update gate enforce the pairing.
+A future phase could automate the check with a custom Clippy lint.
+Another option is `tracing-error::SpanTrace`.
 
 ## Consumer reference
 
-### CLI
+### Command-line interface
 
-  - `photo-frame --log-format pretty`  (default)
-  - `photo-frame --log-format json`    (one JSON event per line on stderr)
-  - `photo-frame --log-format compact` (single-line, no ANSI)
-  - `PHOTO_FRAME_LOG="decode=debug,wasm=info" photo-frame ...` — per-target filtering
+The default is `photo-frame --log-format pretty`.
+Use `photo-frame --log-format json` for one structured event per line.
+The command writes events to standard error.
+Use `photo-frame --log-format compact` for output on a single line.
+Compact output omits American National Standards Institute escape sequences.
+Filter events by target with the following command.
 
-### WASM
+```sh
+PHOTO_FRAME_LOG="decode=debug,wasm=info" photo-frame ...
+```
 
-  The bundle installs `tracing-wasm` on init; events surface in
-  the browser console with the structured fields preserved. A future
-  Phase will add a `window.addEventListener('photo-frame-event', …)`
-  hook that re-emits each event as a `CustomEvent` so a UI panel can
-  tail the workspace without parsing the console.
+### Browser consumer
+
+The bundle installs `tracing-wasm` during initialization.
+Events appear in the browser console with their structured fields preserved.
+A future phase plans a `window.addEventListener('photo-frame-event', …)` hook.
+The hook would emit each event again as a `CustomEvent`.
+A user-interface panel could follow events without parsing the console.
 
 ## See also
 
-  - `docs/DEVELOPMENT.md` (Phase 6) — how to read these in dev
-  - `crates/photo-frame-types/src/category.rs` — `Category` enum + `Categorize` trait
-  - `crates/photo-frame-cli/src/main.rs` — the structured-panic hook + log-format wiring
+[The development guide](DEVELOPMENT.md) covers reading events in Phase 6.
+The [domain types](../crates/photo-frame-types/src/category.rs) define categories.
+The types are the `Category` enum and `Categorize` trait.
+The [entry point](../crates/photo-frame-cli/src/main.rs) wires log formats.
+It also installs the structured-panic hook.

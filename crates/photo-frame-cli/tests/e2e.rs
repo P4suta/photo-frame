@@ -55,8 +55,12 @@ fn cli_processes_synthesized_jpeg() {
 
 #[test]
 fn cli_rejects_empty_input() {
+    let dir = TempDir::new().expect("tempdir");
+    let input = dir.path().join("empty.jpg");
+    std::fs::write(&input, b"").expect("write empty input");
+
     cli()
-        .arg("/dev/null")
+        .arg(&input)
         .arg("--quiet")
         .assert()
         // Category::Input.exit_code() = 2
@@ -66,8 +70,11 @@ fn cli_rejects_empty_input() {
 
 #[test]
 fn cli_rejects_missing_input_with_input_category_exit() {
+    let dir = TempDir::new().expect("tempdir");
+    let input = dir.path().join("missing.jpg");
+
     cli()
-        .arg("/tmp/photo_frame_e2e_nonexistent_input.jpg")
+        .arg(&input)
         .arg("--quiet")
         .assert()
         // CliIoError::ReadInput → Category::Input → 2

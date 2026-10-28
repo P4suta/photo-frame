@@ -216,7 +216,7 @@ mod tests {
     #[test]
     fn strip_exactly_4_bytes_returns_empty_slice() {
         let stripped = strip_heif_exif_prefix(&[0, 0, 0, 0]).expect("present");
-        assert!(stripped.is_empty());
+        assert_eq!(stripped, b"");
     }
 
     #[test]

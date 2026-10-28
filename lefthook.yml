@@ -1,6 +1,8 @@
 # Lefthook hooks delegate to `just` recipes so there is exactly one source of truth
 # for what "fmt / lint / test" means across local, hook, and CI surfaces.
 
+rc: scripts/lefthook-rc.sh
+
 pre-commit:
   parallel: true
   commands:
@@ -16,13 +18,13 @@ pre-commit:
       run: scripts/check-signing.sh config
 
     fmt-rust:
-      glob: '*.rs'
+      glob: "*.rs"
       run: cargo fmt --all -- --check
     fmt-ts:
-      glob: '*.{ts,tsx,js,jsx,json,jsonc}'
+      glob: "*.{ts,tsx,js,jsx,json,jsonc}"
       run: biome format {staged_files}
     fmt-toml:
-      glob: '*.toml'
+      glob: "*.toml"
       run: taplo fmt --check {staged_files}
     typos:
       # `--no-progress` was removed in typos-cli ~1.40; `--quiet` is
@@ -30,11 +32,11 @@ pre-commit:
       # lefthook's structured output rendering.
       run: typos --quiet
     lint-ts:
-      glob: '*.{ts,tsx,js,jsx}'
+      glob: "*.{ts,tsx,js,jsx}"
       run: biome lint {staged_files}
 
 pre-push:
-  parallel: true
+  parallel: false
   commands:
     # ── Signing verification ─────────────────────────────────────────
     # The pre-commit hook above stops *new* unsigned commits from being
@@ -44,10 +46,10 @@ pre-push:
     # and refuses if `%G?` is anything other than `G` for any commit
     # in the range being pushed.
     #
-    # Reads pre-push stdin via lefthook's stdin-passthrough (interactive=true).
+    # Pass the Git protocol to the signature verifier.
     signing-verify:
       priority: 1
-      interactive: true
+      use_stdin: true
       run: scripts/check-signing.sh pre-push
 
     clippy:
@@ -56,5 +58,5 @@ pre-push:
       run: just lint-deps
     test:
       run: just test
-    wasm-build:
-      run: just wasm-build
+    wasm-check:
+      run: just wasm-check

@@ -1,8 +1,7 @@
 # Developing photo-frame
 
-A quick reference for the inner-loop workflows. The full per-phase
-history of speed / observability decisions lives in `BENCHMARKS.md`
-(measurements) and `docs/EVENTS.md` (observability contract).
+Use this guide for routine development tasks.
+See `BENCHMARKS.md` for measurements and `docs/EVENTS.md` for event contracts.
 
 ## One-shot setup
 
@@ -10,65 +9,74 @@ history of speed / observability decisions lives in `BENCHMARKS.md`
 # host: install the project-pinned tooling
 mise install
 
-# container: build the dev image (includes Rust toolchain + every
-# CLI tool the workspace needs)
+# container: build the dev image with Rust and workspace CLI tools
 docker compose build dev
 
-# REQUIRED: install the git hooks. Pre-commit runs `cargo fmt --check`,
-# `biome format`, `taplo fmt --check`, `typos`, and `biome lint` on
-# staged files; pre-push runs the full `just lint` + `just test` +
-# `just wasm-build`. Without this step the same checks only run in
-# CI, where a failure is a full PR round-trip to fix.
+# REQUIRED: install the git hooks before contributing
 just hooks
 ```
 
+The pre-commit hook checks staged files with `cargo fmt --check`.
+It also runs `biome format`, `taplo fmt --check`, `typos`, and `biome lint`.
+The pre-push hook verifies commit signatures.
+It runs `just lint-rust`, `just lint-deps`, `just test`, and `just wasm-check`.
+
+`just wasm-check` builds the WebAssembly package with the development profile for routine checks.
+`just wasm-build` keeps the release profile used by `just ci` and main-branch CI.
+
+Mise pins the local Biome version in `mise.toml`.
+CI and the development container request the same version.
+Run local checks through `mise x --` so they use the project tool versions.
+Run Git commands from a Mise-activated shell so Git hooks also use those versions.
+Biome preserves paragraph line boundaries in Markdown.
+
 ## Inner loop
 
+Run `just dev` for the background Cargo runner in `clippy-all` mode.
+Press `t` for nextest, `d` for doc tests, or `r` for the CLI.
+Use `just test`, `just lint`, `just fmt-check`, and `just ci` for one-shot checks.
+
 ```bash
-# bacon: background cargo runner with single-key job switch.
-# Default job is `clippy-all`. Press `t` for nextest, `d` for doc
-# tests, `r` for run.
+# bacon: switch jobs with t for nextest, d for doc tests, or r for the CLI
 just dev
 
-# Or one-shot per-task:
-just test        # cargo nextest run --workspace + doc tests
-just lint        # clippy + cargo-deny + biome + typos
-just fmt-check   # cargo fmt + biome format + taplo fmt (all dry-run)
-just ci          # full pipeline mirroring CI
+# one-shot project checks
+mise x -- just test
+mise x -- just lint
+mise x -- just fmt-check
+mise x -- just ci
 ```
 
 ## Performance work
 
-```bash
-# Hyperfine-based wall-clock measurements. Variant: host, container,
-# quick, all (default).
-just bench-measure quick
+Run `just bench-measure quick` for Hyperfine host measurements.
+The recipe accepts `host`, `container`, `quick`, or `all` variants.
+Run `just bench` for Divan measurements of decode, frame, and encode paths.
+The harness prints results to standard output.
+`scripts/bench-build.sh` writes build results beneath `artifacts/bench/<UTC>/`.
+`BENCHMARKS.md` records selected measurements, while raw JSON remains local.
 
-# Criterion benchmarks for decode / frame / encode hot paths. HTML
-# report at target/criterion/<group>/report/index.html.
+```bash
+just bench-measure quick
 just bench
 ```
 
-Results land in `artifacts/bench/<UTC>/`. `BENCHMARKS.md` carries the
-curated history; raw JSON is local-only.
-
 ## Observability
 
-The CLI surfaces tracing events as structured JSON via:
+Run the CLI with `--log-format json` to print structured event data.
 
 ```bash
 photo-frame input.jpg --log-format json 2>&1 | jq .
 ```
 
-Every event has a `event_id` field with a dotted name (e.g.
-`decode.exif.datetime.exhausted`). The complete catalogue lives in
-`docs/EVENTS.md`.
+Each event includes a dotted `event_id`, such as `decode.exif.datetime.exhausted`.
+`docs/EVENTS.md` contains the complete event catalogue.
 
 ## Error handling
 
-The CLI uses miette for diagnostic rendering. Every error variant
-declares a stable code + help string and maps to a `Category` via the
-`Categorize` trait:
+The CLI renders diagnostics through `miette`.
+Each error variant has stable `code` and `help` values.
+The `Categorize` trait maps errors to a `Category` for exit-code handling.
 
 ```bash
 photo-frame /dev/null --quiet
@@ -81,21 +89,19 @@ photo-frame /dev/null --quiet
 echo $?   # 2  (Category::Input)
 ```
 
-Exit code map (stable contract):
-
-| Category        | Exit code | Examples                                                          |
-| --------------- | --------- | ----------------------------------------------------------------- |
-| Input           | 2         | empty input, unknown format, bad CLI arg                          |
-| Decode          | 3         | corrupt JPEG, HEIF decode failure                                 |
-| Render          | 4         | (reserved)                                                        |
-| Encode          | 5         | JPEG encoder failure                                              |
-| PartialFailure  | 6         | batch run finished with ≥1 failure under default continue-on-fail |
-| Internal        | 1         | producer-side invariant breach                                    |
+Empty input returns code 2.
+Unknown formats and invalid command-line arguments also return code 2.
+Decode errors return code 3 for corrupt `JPEG` or `HEIF` image data.
+Code 4 remains reserved for rendering errors.
+Encode errors return code 5 for failures such as `JPEG` output errors.
+Batch processing returns code 6 after default continuation with failed files.
+Code 1 marks an internal error caused by a producer-side invariant breach.
 
 ## Batch processing
 
+The `--jobs 8` option processes files in parallel and continues after failures.
+
 ```bash
-# Process a folder in parallel; failures don't stop the run.
 photo-frame photos/*.jpg -o out/ --jobs 8
 #   …progress bar…
 #   batch summary
@@ -106,72 +112,94 @@ photo-frame photos/*.jpg -o out/ --jobs 8
 #     total:     23.4s  (avg 23ms / file, 14.8x speedup over single-thread, 8 jobs)
 echo $?   # 6 (PartialFailure) — some outputs missing
 
-# Stop at first failure; exit code reflects the failing input's category.
+# Stop at the first failure and return its category.
 photo-frame photos/*.jpg -o out/ --strict
 ```
 
-For the browser, drop multiple files on the drop zone; the UI
-switches to a batch view and runs the Worker-hosted `frame_batch`
-off the main thread. Manual verification:
+For browser use, drop image files onto the drop zone to open batch mode.
+The `frame_batch` WebAssembly worker keeps image processing off the main thread.
+Run `just wasm-dev`, then drop five or more `JPEG` images onto the drop zone.
+Confirm that every row changes from `processing` to `done`.
+Select each row's Download control to save its framed image.
+Open the browser Performance panel during encoding.
+Confirm that the main thread stays idle while the worker encodes images.
 
 ```bash
 just wasm-dev
-# In the browser: drop 5+ JPEGs on the drop zone.
-# Expected: each row reports `processing` → `done`; per-row "Download"
-# saves the framed JPEG.
-# DevTools → Performance: the Main thread stays mostly idle while
-# the WASM Worker drives encoding.
 ```
 
 ## Release image
 
+Run `just docker-build-release` to build the `photo-frame:latest` image.
+The release image uses Debian slim and contains CA certificates and the CLI.
+The image measures approximately 32 MB.
+
 ```bash
 just docker-build-release
-# produces photo-frame:latest (~32 MB) — debian-slim + ca-certs + the CLI
 docker run --rm -v $PWD:/data photo-frame /data/input.jpg -o /data/out.jpg
 ```
 
 ## Running tests
 
+`just test` runs workspace nextest tests and documentation tests.
+`just e2e` runs CLI subprocess tests.
+`just bench` runs Divan measurements.
+`just cov` writes `lcov.info` through llvm-cov.
+
 ```bash
-just test        # full workspace (nextest + doc tests)
-just e2e         # CLI end-to-end (binary-level)
-just bench       # divan per-stage / per-fixture; see BENCHMARKS.md Runtime section
-just cov         # llvm-cov → lcov.info
+just test
+just e2e
+just bench
+just cov
 ```
+
+## Commit signature checks
+
+The pre-push hook reads Git ref records from standard input.
+Lefthook's project rc exports the destination from the original hook arguments.
+For a new branch, the verifier fetches the observed destination heads and checks commits introduced relative to that snapshot.
+Existing branches use the old and new object IDs from Git's protocol.
+The hook accepts only Git's `G` signature verdict and rejects input and Git command failures.
+Signature validity depends on Git and the configured trust store.
+
+The `signing` integration tests execute the production Bash script with isolated Git repositories and temporary signing keys.
+They cover input failures, signed and unsigned commits, replacement refs, pruning settings, and signature display settings.
+Git process execution and file descriptor behavior cross the script's external boundary, so native integration tests supply the adapter checks.
+Run them through `cargo test -p photo-frame-cli --test signing` or the normal `just test` command.
 
 ## Updating dependencies
 
+Run `just outdated` to find dependencies with newer versions.
+Use `cargo update` for a one-time lockfile update.
+Renovate opens pull requests for routine dependency updates.
+
 ```bash
-just outdated   # what's behind?
+just outdated
 # `cargo update` for a one-off bump; Renovate auto-PRs the rest.
 ```
 
-## File / directory map
+## Project files
 
-```
-.cargo/              cargo config (alias, linker overrides if any)
-.config/nextest.toml nextest profiles (default + ci)
-.github/workflows/   ci.yml, pages.yml, bench.yml, security.yml
-.dockerignore        keeps cargo-chef cache cold-resistant
-artifacts/           local-only; bench / timing reports
-BENCHMARKS.md        curated speed history per phase
-bacon.toml           bacon job + keybinding config
-crates/              workspace members
-  photo-frame-types/    Photograph / Pixels / Provenance / Category / Categorize
-  photo-frame-decode/   bytes → Photograph; tests/proptest_decode.rs
-  photo-frame-frame/    Photograph → framed Pixels
-  photo-frame-encode/   Pixels → JPEG bytes
-  photo-frame/          facade: pipeline() + re-exports
-  photo-frame-cli/      `photo-frame` binary; tests/e2e.rs
-  photo-frame-wasm/     wasm-bindgen surface for the browser
-  photo-frame-bench/    divan benchmark suite + shared bench fixtures
-deny.toml             cargo-deny config (bans / licences / advisories / sources)
-docs/                 EVENTS.md (event catalogue), DEVELOPMENT.md (this file)
-Dockerfile            multi-stage: chef-base / planner / cacher / builder / runtime / dev
-docker-compose.yml    builds `target: dev` for `docker compose run`
-justfile              command surface
-mise.toml             host-side tool version pin
-scripts/              bench-build.sh, timings.sh
-taplo.toml / biome.json / rustfmt.toml / typos.toml   per-formatter config
-```
+Cargo aliases and linker overrides live in `.cargo/`.
+Nextest profiles live in `.config/nextest.toml`.
+The active workflows are `ci.yml` and `security.yml`.
+Those workflow files live under `.github/workflows/`.
+CI deploys the current main run's web bundle after required checks pass.
+The `security.yml` workflow runs optional `heif` verification only on manual dispatch.
+`.dockerignore` prevents build outputs from invalidating Docker layers.
+`artifacts/` holds local timing reports, and `bacon.toml` configures jobs.
+`deny.toml` controls dependency bans, licenses, advisories, and sources.
+`crates/photo-frame-types` defines `Photograph`, `Pixels`, `Provenance`, and `Category`.
+That crate also defines the `Categorize` trait.
+`crates/photo-frame-decode` converts encoded bytes into a `Photograph`.
+It contains the `tests/proptest_decode.rs` property tests.
+`crates/photo-frame-frame` converts a `Photograph` into framed pixels.
+`crates/photo-frame-encode` converts pixels into `JPEG` bytes.
+`crates/photo-frame` provides the pipeline façade and re-exports.
+`crates/photo-frame-cli` provides the `photo-frame` binary and `tests/e2e.rs`.
+`crates/photo-frame-wasm` provides the browser-facing wasm-bindgen API.
+`crates/photo-frame-bench` contains Divan benchmarks and shared fixtures.
+`Dockerfile` defines chef, cache, builder, runtime, and development stages.
+`docker-compose.yml` builds the development target by default.
+`mise.toml` pins host tools, and `scripts/` holds benchmark commands.
+Taplo, Biome, rustfmt, and typos use repository configuration files.

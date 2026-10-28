@@ -13,8 +13,8 @@
 //!
 //! iai-callgrind drives Valgrind's `callgrind` tool to count exact
 //! instruction executions per benchmark — hardware-independent and
-//! deterministic enough for a CI regression gate (cf. divan's
-//! wall-clock numbers, which need statistical handling).
+//! deterministic instruction counts for comparisons across revisions
+//! (cf. divan's wall-clock numbers, which need statistical handling).
 //!
 //! Fixture set is intentionally small: the 4 MP synth and the
 //! panorama from [`photo_frame_bench::fixtures::small`]. Running a
@@ -29,12 +29,6 @@
 //! cargo bench -p photo-frame-bench --bench icount
 //! ```
 //!
-//! ## CI gate
-//!
-//! `.github/workflows/runtime-bench.yml` compares the icount totals
-//! against `main` and fails on any stage with > 5 % instruction-count
-//! regression. (Workflow lands in a follow-up — Phase A3.2.)
-
 use std::hint::black_box;
 
 use iai_callgrind::{library_benchmark, library_benchmark_group, main};

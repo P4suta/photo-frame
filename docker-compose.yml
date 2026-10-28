@@ -21,7 +21,7 @@ services:
     # appear root-owned to the host. The Dockerfile's `USER dev` switch
     # provides the right UID inside the image but compose's explicit user
     # override here also covers `docker compose run` invocations.
-    user: '${HOST_UID:-1000}:${HOST_GID:-1000}'
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     volumes:
       - .:/workspace:cached
       # Per-volume named caches survive across container restarts so cargo
@@ -37,7 +37,7 @@ services:
       - node-cache:/workspace/crates/photo-frame-wasm/www/node_modules
     working_dir: /workspace
     ports:
-      - '5173:5173' # Vite dev server
+      - "5173:5173" # Vite dev server
     tty: true
     stdin_open: true
     command: bash

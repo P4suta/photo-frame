@@ -1,0 +1,16 @@
+name                = "photo-frame"
+summary             = "Pre-release photo framing with golden-ratio borders and Exchangeable Image File Format captions"
+install             = "cargo install --locked --path crates/photo-frame-cli"
+usage_language      = "sh"
+usage               = "photo-frame input.jpg -o framed.jpg"
+documentation_index = true
+copyright           = "2026 photo-frame contributors"
+license             = "MIT OR Apache-2.0"
+
+[preserved_licenses]
+mit_sha256    = "f0b54c40e6c27d08b35db94855db2e1eee98366bf864d722023a001ddea104e3"
+apache_sha256 = "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+
+[[consent]]
+contributor = "Yasunobu"
+evidence    = "https://github.com/P4suta/photo-frame/commit/c1b2d60db4bbf448c71544cc74b3e069f77f9a57"
