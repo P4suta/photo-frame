@@ -170,12 +170,12 @@ jobs:
         with:
           tool: just,wasm-pack@${{ env.WASM_PACK_VERSION }}
 
-      - name: wasm-pack build
-        # `just wasm-build` already strips RUSTUP_TOOLCHAIN before
-        # invoking wasm-pack so the per-crate `rust-toolchain.toml`
-        # selects nightly cleanly — but CI runners don't set
-        # RUSTUP_TOOLCHAIN in the first place, so this is a no-op
-        # extra safety on top.
+      - name: wasm-pack build (development)
+        if: github.event_name == 'pull_request'
+        run: just wasm-check
+
+      - name: wasm-pack build (release)
+        if: github.event_name != 'pull_request'
         run: just wasm-build
 
       - name: Upload WASM bundle

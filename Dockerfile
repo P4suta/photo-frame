@@ -1,9 +1,8 @@
 # syntax=docker/dockerfile:1.7
-# All ARG pins below are auto-bumped by Renovate.
-# Look at renovate.json regexManagers for the matching rules.
+# Renovate tracks the annotated ARG pins and Debian package versions.
 
 # renovate: datasource=docker depName=rust versioning=docker
-ARG RUST_VERSION=1.95.0
+ARG RUST_VERSION=1.99.1
 # Debian trixie (13) ships libheif >= 1.19; bookworm's 1.15 is too old
 # for the current libheif-sys (requires >= 1.18). Switching the base
 # unlocks the opt-in `heif` cargo feature without compiling libheif
@@ -57,7 +56,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
-        pkg-config libssl-dev build-essential libheif-dev clang
+        pkg-config=1.8.1-4 \
+        libssl-dev=3.5.7-1~deb13u3 \
+        build-essential=12.12 \
+        libheif-dev=1.23.6-2~deb13u1 \
+        clang=1:19.0-63
 
 WORKDIR /workspace
 COPY --from=planner /workspace/recipe.json recipe.json
@@ -81,14 +84,15 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 # Thin distribution image — just the CLI binary + ca-certificates +
 # tzdata. Use this with: `docker build --target runtime -t photo-frame .`
 # Image size is roughly the binary (~10-15 MB) + base layer (~80 MB).
-FROM debian:trixie-slim AS runtime
+FROM debian:13.7-slim@sha256:89c1ea91e897f0fe0a3731595330bc45b8bdef4047464a07116f891a94054b31 AS runtime
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
-        ca-certificates tzdata
+        ca-certificates=20250419+deb13u1 \
+        tzdata=2026e-0+deb13u1
 
 COPY --from=builder /workspace/target/release/photo-frame /usr/local/bin/photo-frame
 ENTRYPOINT ["photo-frame"]
@@ -116,10 +120,17 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
-        ca-certificates curl git pkg-config libssl-dev build-essential \
-        unzip xz-utils \
-        libheif-dev clang \
-        valgrind
+        ca-certificates=20250419+deb13u1 \
+        curl=8.14.1-2+deb13u7 \
+        git=1:2.47.3-0+deb13u1 \
+        pkg-config=1.8.1-4 \
+        libssl-dev=3.5.7-1~deb13u3 \
+        build-essential=12.12 \
+        unzip=6.0-29+deb13u1 \
+        xz-utils=5.8.1-1+deb13u2 \
+        libheif-dev=1.23.6-2~deb13u1 \
+        clang=1:19.0-63 \
+        valgrind=1:3.24.0-3
 
 # bun (Zig-based JS runtime + package manager). Symlinking `node` → `bun`
 # so npm-published packages with `#!/usr/bin/env node` shebangs (lefthook
@@ -133,7 +144,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # At runtime, with BUN_INSTALL unset, bun falls back to ~/.bun for those
 # dirs, which the dev user owns under /home/dev.
 # renovate: datasource=npm depName=bun
-ARG BUN_VERSION=1.3.14
+ARG BUN_VERSION=1.4.4
 RUN BUN_INSTALL=/usr/local bash -c 'curl -fsSL https://bun.sh/install | bash -s -- "bun-v${BUN_VERSION}"' \
  && bun --version \
  && ln -sf "$(which bun)" /usr/local/bin/node
@@ -161,22 +172,33 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     cargo install --locked cargo-binstall
 
+# renovate: datasource=crate depName=taplo-cli
+ARG TAPLO_VERSION=0.10.0
+# renovate: datasource=crate depName=hyperfine
+ARG HYPERFINE_VERSION=1.21.0
+# renovate: datasource=crate depName=samply
+ARG SAMPLY_VERSION=0.13.1
+# renovate: datasource=crate depName=inferno
+ARG INFERNO_VERSION=0.12.8
+# renovate: datasource=crate depName=iai-callgrind-runner
+ARG IAI_CALLGRIND_RUNNER_VERSION=0.16.1
+
 # renovate: datasource=crate depName=wasm-pack
 ARG WASM_PACK_VERSION=0.15.0
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     cargo binstall --no-confirm --no-symlinks --force \
         just \
-        taplo-cli \
+        "taplo-cli@${TAPLO_VERSION}" \
         typos-cli \
         "wasm-pack@${WASM_PACK_VERSION}" \
         cargo-deny \
         cargo-nextest \
-        hyperfine \
+        "hyperfine@${HYPERFINE_VERSION}" \
         cargo-chef \
-        samply \
-        inferno \
-        iai-callgrind-runner
+        "samply@${SAMPLY_VERSION}" \
+        "inferno@${INFERNO_VERSION}" \
+        "iai-callgrind-runner@${IAI_CALLGRIND_RUNNER_VERSION}"
 
 # BUN_INSTALL places global tools in /usr/local/bin.
 # renovate: datasource=npm depName=@biomejs/biome
@@ -194,7 +216,7 @@ ARG HOST_GID=1000
 # Pre-create every path that docker-compose mounts a named volume at.
 # Empty volumes inherit the mount-point's ownership from the image on
 # first attach; without these mkdirs the volumes land as root:root and
-# the dev user (USER dev below) cannot write into them. The cargo
+# the dev user cannot write into them. The cargo
 # registry/git caches live under /home/dev/ and are covered by the
 # /home/dev chown, but /workspace/target and the node_modules cache
 # live under /workspace and need to exist before chown -R cascades.
@@ -207,7 +229,7 @@ RUN groupadd --gid ${HOST_GID} dev \
              /home/dev/.cargo/git \
  && chown -R dev:dev /workspace /home/dev
 
-USER dev
+USER ${HOST_UID}:${HOST_GID}
 WORKDIR /workspace
 
 CMD ["bash"]

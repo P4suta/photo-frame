@@ -12,7 +12,26 @@
   "labels": ["dependencies"],
   "rangeStrategy": "bump",
   "lockFileMaintenance": { "enabled": true, "schedule": ["before 6am on monday"] },
+  "customDatasources": {
+    "debian-trixie": {
+      "format": "plain",
+      "transformTemplates": [
+        "($rows := releases.version.($fields := $split($, '|').$trim(); $count($fields) = 4 and $fields[0] = '{{packageName}}' and $fields[2] in ['trixie', 'trixie-updates', 'trixie-security'] ? {'version': $fields[1], 'architectures': $split($fields[3], ',').$trim()}); $available := [$distinct($rows.version).($version := $; $architectures := $distinct($rows[version = $version].architectures); 'all' in $architectures or ('amd64' in $architectures and 'arm64' in $architectures) ? {'version': $version})]; $assert($count($available) > 0, 'No Trixie package version is available for amd64 and arm64'); {'releases': [$available, $not('{{currentValue}}' in $available.version) ? {'version': '{{currentValue}}', 'isDeprecated': true}]})"
+      ]
+    }
+  },
   "packageRules": [
+    {
+      "description": "Use Debian QA until the native deb datasource supports Packages.xz (renovatebot/renovate#44330).",
+      "matchManagers": ["dockerfile"],
+      "matchFileNames": ["Dockerfile"],
+      "matchDatasources": ["deb"],
+      "matchDepTypes": ["install"],
+      "overrideDatasource": "custom.debian-trixie",
+      "versioning": "deb",
+      "registryUrls": ["https://qa.debian.org/madison.php?package={{packageName}}&text=on"],
+      "groupName": "debian packages"
+    },
     {
       "matchManagers": ["cargo"],
       "groupName": "rust crates"
@@ -34,16 +53,22 @@
       "groupName": "perf crates"
     },
     {
-      "description": "Perf-tool binaries pinned via mise.toml's `cargo:NAME` entries. Renovate's mise manager picks these up automatically; grouping keeps their PRs visible alongside the cargo perf-crate bumps that often pair with them.",
-      "matchManagers": ["mise"],
+      "description": "Keep Mise and Docker pins for matching performance tools together.",
       "matchPackageNames": [
         "cargo:samply",
+        "samply",
         "cargo:inferno",
+        "inferno",
         "cargo:iai-callgrind-runner",
-        "cargo:hyperfine",
-        "cargo:jq"
+        "iai-callgrind-runner",
+        "hyperfine"
       ],
       "groupName": "perf crates"
+    },
+    {
+      "description": "Keep the host and container Taplo pins together.",
+      "matchPackageNames": ["taplo", "taplo-cli"],
+      "groupName": "taplo"
     },
     {
       "matchManagers": ["npm"],
@@ -56,6 +81,7 @@
     },
     {
       "matchManagers": ["dockerfile", "docker-compose"],
+      "matchDatasources": ["docker"],
       "groupName": "docker base images"
     },
     {

@@ -4,7 +4,7 @@
 
 [tools]
 biome                     = "2.6.3"
-bun                       = "1.3.14"
+bun                       = "1.4.4"
 "aqua:rustwasm/wasm-pack" = "0.15.0"
 
 # Tools the Dockerfile already installs via cargo-binstall — listed
@@ -12,32 +12,32 @@ bun                       = "1.3.14"
 # `mise install` and get the same versions. The Dockerfile remains
 # the source of truth for what's *in the container*; mise keeps host
 # parity reproducible.
-hyperfine = "latest"
-jq        = "latest"
+hyperfine = "1.21.0"
+jq        = "1.8.2"
 # taplo formats / lints every Cargo.toml + every other TOML in the
 # tree (`just fmt-check` runs `taplo fmt --check`). Listed here so
 # `mise install` on a fresh host pulls the same version CI uses —
 # without it, contributors run `cargo fmt + biome format` locally,
 # pass `just fmt-check` if taplo silently no-ops, and only learn
 # about a TOML drift when CI's `format / lint` job rejects the PR.
-taplo = "latest"
+taplo = "0.10.0"
 
 # Runtime profiling: samply records perf traces and opens them in the
 # Firefox Profiler UI (works locally, no GPU dependency, no
 # system-wide perf permissions needed once unprivileged perf is
 # enabled). `just profile-pipeline FIXTURE` drives it.
-"cargo:samply" = "latest"
+"cargo:samply" = "0.13.1"
 
 # tracing-flame collects span timings; inferno renders the resulting
 # `.folded` file into an SVG flamegraph. Together they give us the
 # span-level latency tree that `tracing` already emits in
 # pipeline.rs / render.rs / decode/lib.rs / encode/lib.rs but had
 # no consumer for.
-"cargo:inferno" = "latest"
+"cargo:inferno" = "0.12.8"
 
 # iai-callgrind's runner binary. The library crate
 # `iai-callgrind` (added to photo-frame-bench dev-dependencies)
 # expects this binary on $PATH at the same version. Valgrind
 # itself is a system-package dependency — `apt install valgrind`
 # on Debian/Ubuntu, installed by Dockerfile for the dev image.
-"cargo:iai-callgrind-runner" = "latest"
+"cargo:iai-callgrind-runner" = "0.16.1"

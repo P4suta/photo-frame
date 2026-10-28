@@ -12,7 +12,8 @@ Any dependency that adds a blocked crate fails `cargo deny check bans`.
 The root `Cargo.toml` sets `workspace.lints.rust.unsafe_code` to `forbid`.
 Project code uses safe crates whose upstream unsafe blocks receive audits.
 Every change must keep the baseline WebAssembly build portable.
-Run `wasm-pack build --target web --release crates/photo-frame-wasm` to check it.
+Run `just wasm-check` to check it with the development profile.
+Use `just wasm-build` for the optimized package.
 Feature flags enable vectorized and threaded implementations where supported.
 Public errors include `DecodeError`, `EncodeError`, and `PipelineError`.
 Those types use `thiserror::Error` and `miette::Diagnostic`.

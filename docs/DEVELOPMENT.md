@@ -19,7 +19,10 @@ just hooks
 The pre-commit hook checks staged files with `cargo fmt --check`.
 It also runs `biome format`, `taplo fmt --check`, `typos`, and `biome lint`.
 The pre-push hook verifies commit signatures.
-It runs `just lint-rust`, `just lint-deps`, `just test`, and `just wasm-build`.
+It runs `just lint-rust`, `just lint-deps`, `just test`, and `just wasm-check`.
+
+`just wasm-check` builds the WebAssembly package with the development profile for routine checks.
+`just wasm-build` keeps the release profile used by `just ci` and main-branch CI.
 
 Mise pins the local Biome version in `mise.toml`.
 CI and the development container request the same version.
@@ -149,6 +152,20 @@ just e2e
 just bench
 just cov
 ```
+
+## Commit signature checks
+
+The pre-push hook reads Git ref records from standard input.
+Lefthook's project rc exports the destination from the original hook arguments.
+For a new branch, the verifier fetches the observed destination heads and checks commits introduced relative to that snapshot.
+Existing branches use the old and new object IDs from Git's protocol.
+The hook accepts only Git's `G` signature verdict and rejects input and Git command failures.
+Signature validity depends on Git and the configured trust store.
+
+The `signing` integration tests execute the production Bash script with isolated Git repositories and temporary signing keys.
+They cover input failures, signed and unsigned commits, replacement refs, pruning settings, and signature display settings.
+Git process execution and file descriptor behavior cross the script's external boundary, so native integration tests supply the adapter checks.
+Run them through `cargo test -p photo-frame-cli --test signing` or the normal `just test` command.
 
 ## Updating dependencies
 
